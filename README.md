@@ -113,12 +113,16 @@ pi-controls loads config from two places and deep-merges them. **Project-local w
 
 | Scope | Path |
 |-------|------|
-| Global | `~/.pi/agent/extensions/pi-controls.json` |
-| Project-local | `.pi/extensions/pi-controls.json` (walks up from CWD) |
+| Global | `~/.pi/agent/extensions/pi-controls.jsonc` |
+| Project-local | `.pi/extensions/pi-controls.jsonc` (walks up from CWD) |
+
+Config files use **JSONC** (JSON with Comments), so `//` and `/* */` comments are supported. Plain `.json` is also accepted as a fallback.
+
+See [`examples/sample.jsonc`](examples/sample.jsonc) for a fully annotated starting point.
 
 This means you can define your base policies globally and override or extend them per project.
 
-**Global** (`~/.pi/agent/extensions/pi-controls.json`):
+**Global** (`~/.pi/agent/extensions/pi-controls.jsonc`):
 ```json
 {
   "policies": {
@@ -135,7 +139,7 @@ This means you can define your base policies globally and override or extend the
 }
 ```
 
-**Project-local** (`.pi/extensions/pi-controls.json` at project root):
+**Project-local** (`.pi/extensions/pi-controls.jsonc` at project root):
 ```json
 {
   "policies": {

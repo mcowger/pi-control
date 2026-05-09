@@ -1,16 +1,21 @@
 /**
- * Config schema and loader for pi-controls.
+ * Config schema and JSONC loader for pi-controls.
  *
- * Config file: pi-controls.json
- * Global:  getAgentDir()/extensions/pi-controls.json
- * Local:   .pi/extensions/pi-controls.json (walks up from CWD)
+ * Config file: pi-controls.jsonc  (falls back to pi-controls.json)
+ * Global:  getAgentDir()/extensions/pi-controls.jsonc
+ * Local:   .pi/extensions/pi-controls.jsonc  (walks up from CWD)
  *
- * Local definitions win on conflict (deep merge, local > global).
+ * Local definitions win on conflict (deep merge: global → local).
  */
 
-import { ConfigLoader } from "@aliou/pi-utils-settings";
+import { existsSync, statSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, resolve } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import stripJsonComments from "strip-json-comments";
 
-// ─── Raw config types (what users write) ────────────────────────────────────
+// ─── Schema types ─────────────────────────────────────────────────────────────
 
 export type Action = "allow" | "ask" | "deny" | "log";
 
@@ -25,20 +30,15 @@ export interface Policy {
 	rules: Rule[];
 }
 
-/** Raw shape written by users in pi-controls.json */
 export interface ControlsConfig {
-	/** Named policies. */
 	policies?: Record<string, Policy>;
-	/** Maps filesystem paths to policy names. */
 	locations?: Record<string, string>;
 	/**
 	 * Fallback policy name when no location matches.
-	 * null = fail-open (all tool calls proceed).
+	 * null / absent = fail-open (all tool calls proceed unrestricted).
 	 */
 	defaultPolicy?: string | null;
 }
-
-// ─── Resolved config (after merge + defaults) ────────────────────────────────
 
 export interface ControlsResolvedConfig {
 	policies: Record<string, Policy>;
@@ -52,8 +52,90 @@ const DEFAULTS: ControlsResolvedConfig = {
 	defaultPolicy: null,
 };
 
-// ─── Loader ──────────────────────────────────────────────────────────────────
+// ─── File discovery ───────────────────────────────────────────────────────────
 
-export function createConfigLoader(): ConfigLoader<ControlsConfig, ControlsResolvedConfig> {
-	return new ConfigLoader<ControlsConfig, ControlsResolvedConfig>("pi-controls", DEFAULTS);
+const FILENAMES = ["pi-controls.jsonc", "pi-controls.json"];
+
+function findGlobalPath(): string {
+	const base = resolve(getAgentDir(), "extensions");
+	for (const name of FILENAMES) {
+		const p = resolve(base, name);
+		if (existsSync(p)) return p;
+	}
+	// Default to .jsonc for new files.
+	return resolve(base, "pi-controls.jsonc");
+}
+
+function findLocalPath(): string | null {
+	let dir = process.cwd();
+	const home = homedir();
+	while (true) {
+		if (dir === home) break;
+		const piDir = resolve(dir, ".pi");
+		if (existsSync(piDir) && statSync(piDir).isDirectory()) {
+			for (const name of FILENAMES) {
+				const p = resolve(piDir, `extensions/${name}`);
+				if (existsSync(p)) return p;
+			}
+			// Not found yet — return the canonical .jsonc path for writes.
+			return resolve(piDir, "extensions/pi-controls.jsonc");
+		}
+		const parent = resolve(dir, "..");
+		if (parent === dir) break;
+		dir = parent;
+	}
+	return null;
+}
+
+// ─── Deep merge ───────────────────────────────────────────────────────────────
+
+function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): void {
+	for (const key of Object.keys(source)) {
+		const sv = source[key];
+		if (sv === undefined) continue;
+		if (sv !== null && typeof sv === "object" && !Array.isArray(sv)) {
+			if (!target[key] || typeof target[key] !== "object") target[key] = {};
+			deepMerge(target[key] as Record<string, unknown>, sv as Record<string, unknown>);
+		} else {
+			target[key] = sv;
+		}
+	}
+}
+
+// ─── Loader ───────────────────────────────────────────────────────────────────
+
+async function readJsonc(path: string): Promise<ControlsConfig | null> {
+	try {
+		const raw = await readFile(path, "utf-8");
+		return JSON.parse(stripJsonComments(raw)) as ControlsConfig;
+	} catch {
+		return null;
+	}
+}
+
+export class ControlsConfigLoader {
+	private resolved: ControlsResolvedConfig = structuredClone(DEFAULTS);
+
+	async load(): Promise<void> {
+		const merged = structuredClone(DEFAULTS) as Record<string, unknown>;
+
+		const globalCfg = await readJsonc(findGlobalPath());
+		if (globalCfg) deepMerge(merged, globalCfg as Record<string, unknown>);
+
+		const localPath = findLocalPath();
+		if (localPath) {
+			const localCfg = await readJsonc(localPath);
+			if (localCfg) deepMerge(merged, localCfg as Record<string, unknown>);
+		}
+
+		this.resolved = merged as unknown as ControlsResolvedConfig;
+	}
+
+	getConfig(): ControlsResolvedConfig {
+		return this.resolved;
+	}
+}
+
+export function createConfigLoader(): ControlsConfigLoader {
+	return new ControlsConfigLoader();
 }
