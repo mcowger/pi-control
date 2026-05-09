@@ -1,0 +1,27 @@
+{
+  "name": "pi-controls",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "check": "biome check .",
+    "format": "biome format --write ."
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "dependencies": {
+    "@aliou/pi-utils-settings": "^0.15.1",
+    "minimatch": "^10.0.1",
+    "bash-parser": "^0.5.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@types/bun": "latest",
+    "@biomejs/biome": "^1.9.4",
+    "typescript": "^5.6.3"
+  }
+}

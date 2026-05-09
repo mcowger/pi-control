@@ -1,0 +1,91 @@
+import { describe, expect, it } from "bun:test";
+import { matchRule, mostRestrictive, specificityScore } from "../../src/utils/matching.js";
+import type { Policy } from "../../src/config.js";
+
+describe("specificityScore", () => {
+	it("returns full length when no wildcard", () => {
+		expect(specificityScore("github_create_pull_request")).toBe(26);
+	});
+
+	it("counts chars before first wildcard", () => {
+		expect(specificityScore("git commit *")).toBe(11);
+		expect(specificityScore("git *")).toBe(4);
+		expect(specificityScore("*")).toBe(0);
+	});
+
+	it("handles ? wildcard", () => {
+		expect(specificityScore("git?commit")).toBe(3);
+	});
+});
+
+describe("mostRestrictive", () => {
+	it("deny wins over everything", () => {
+		expect(mostRestrictive(["allow", "log", "ask", "deny"])).toBe("deny");
+	});
+
+	it("ask beats log and allow", () => {
+		expect(mostRestrictive(["allow", "log", "ask"])).toBe("ask");
+	});
+
+	it("log beats allow", () => {
+		expect(mostRestrictive(["allow", "log"])).toBe("log");
+	});
+
+	it("defaults to allow for empty list", () => {
+		expect(mostRestrictive([])).toBe("allow");
+	});
+});
+
+describe("matchRule", () => {
+	const strictPolicy: Policy = {
+		defaultAction: "deny",
+		rules: [
+			{ action: "allow", tool: "bash", pattern: "git *" },
+			{ action: "ask", tool: "bash", pattern: "git commit *" },
+			{ action: "deny", tool: "bash", pattern: "rm *" },
+			{ action: "log", tool: "read" },
+			{ action: "deny", tool: "write" },
+			{ action: "deny", tool: "github_*" },
+		],
+	};
+
+	it("uses defaultAction when no rule matches", () => {
+		expect(matchRule(strictPolicy, "find", null)).toBe("deny");
+	});
+
+	it("matches exact tool name", () => {
+		expect(matchRule(strictPolicy, "write", null)).toBe("deny");
+	});
+
+	it("matches tool glob", () => {
+		expect(matchRule(strictPolicy, "github_create_pr", null)).toBe("deny");
+	});
+
+	it("matches bash command pattern", () => {
+		expect(matchRule(strictPolicy, "bash", "git status")).toBe("allow");
+	});
+
+	it("prefers more specific rule (git commit * over git *)", () => {
+		// git commit * has score 11, git * has score 4 → ask wins
+		expect(matchRule(strictPolicy, "bash", "git commit -m 'hi'")).toBe("ask");
+	});
+
+	it("matches rm command", () => {
+		expect(matchRule(strictPolicy, "bash", "rm /tmp/foo")).toBe("deny");
+	});
+
+	it("uses tiebreaker: allow beats ask at same specificity", () => {
+		const policy: Policy = {
+			defaultAction: "deny",
+			rules: [
+				{ action: "allow", tool: "bash", pattern: "git *" },
+				{ action: "ask", tool: "bash", pattern: "git *" },
+			],
+		};
+		expect(matchRule(policy, "bash", "git status")).toBe("allow");
+	});
+
+	it("non-bash tool with log action proceeds", () => {
+		expect(matchRule(strictPolicy, "read", null)).toBe("log");
+	});
+});

@@ -129,9 +129,9 @@ deny > ask > log > allow
 
 ## Bash AST Parsing
 
-Shell commands are parsed using **`sh-syntax`** — a WASM build of `mvdan/sh` (the same parser behind `shfmt`). It supports POSIX shell, bash, and zsh.
+Shell commands are parsed using **`bash-parser`** — a standard-compliant bash parser that produces a full AST with command names, arguments, and redirect targets.
 
-> **Note:** Verify `sh-syntax` WASM loads correctly under Bun early in implementation — Bun has WASM support but this should be smoke-tested before building on top of it.
+> **Note:** `sh-syntax` (mvdan/sh WASM) was evaluated but rejected: its JSON serialization strips all content from `Cmd` nodes, leaving only `Pos`/`End` position data. `bash-parser` was chosen as the replacement.
 
 From the parsed AST, the following are extracted per pipeline stage:
 
@@ -212,7 +212,7 @@ tests/
 | Package manager | Bun (`bun install`, `bun.lockb`) |
 | Test runner | `bun test` |
 | Linter / formatter | Biome |
-| Shell parser | `sh-syntax` (mvdan/sh WASM) |
+| Shell parser | `bash-parser` |
 | Config loader | `@aliou/pi-utils-settings` (`ConfigLoader`) |
 
 ---
