@@ -329,9 +329,9 @@ Each pipeline stage (`|`, `&&`, `;`) is evaluated independently. The most restri
 
 ## Safe Command Patterns
 
-`src/utils/safe-commands.ts` exports `SAFE_BASH_PATTERNS` — a curated list of ~90 bash command glob patterns that are considered read-only / non-mutating. The list is intentionally conservative: commands that can mutate files under certain flags (e.g. `sed -i`, `awk` with output redirection) are excluded.
+pi-controls ships a built-in preset, `"$safe-bash"`, that expands to ~90 allow rules for non-mutating bash commands. Use it anywhere in a `rules` array instead of listing the patterns by hand.
 
-Patterns are grouped by category:
+The preset covers:
 
 | Category | Examples |
 |----------|----------|
@@ -343,9 +343,11 @@ Patterns are grouped by category:
 | System info | `echo *`, `env`, `which *`, `ps *`, `uname *` |
 | Package info | `npm list *`, `pip show *`, `bun pm ls *` |
 
-### Using patterns in a JSONC config
+The list is intentionally conservative. Commands that can mutate files under certain flags (e.g. `sed -i`, `awk` with output redirection) are excluded.
 
-Copy the rules you need from [`examples/sample.jsonc`](examples/sample.jsonc), which already includes the full safe list inline under the `readonly` policy. You only need the patterns relevant to your use case — there is no need to include all of them.
+### Usage
+
+Place `"$safe-bash"` as an entry in `rules`. It mixes freely with regular rule objects and expands in place:
 
 ```jsonc
 {
@@ -357,56 +359,16 @@ Copy the rules you need from [`examples/sample.jsonc`](examples/sample.jsonc), w
         { "action": "allow", "tool": "grep" },
         { "action": "allow", "tool": "find" },
         { "action": "allow", "tool": "ls" },
-        // Add only the bash patterns you actually need:
-        { "action": "allow", "tool": "bash", "pattern": "git log *" },
-        { "action": "allow", "tool": "bash", "pattern": "git diff *" },
-        { "action": "allow", "tool": "bash", "pattern": "cat *" }
+        { "action": "deny",  "tool": "write" },
+        { "action": "deny",  "tool": "edit" },
+        "$safe-bash" // expands to ~90 allow rules for safe bash commands
       ]
     }
   }
 }
 ```
 
-### Using patterns in a TypeScript extension
-
-If you are building a TypeScript pi extension that sits alongside pi-controls (e.g. in the same repo or a fork), you can import `SAFE_BASH_PATTERNS` directly and map it to rules programmatically rather than duplicating the list by hand.
-
-```typescript
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { SAFE_BASH_PATTERNS } from "./src/utils/safe-commands.js";
-import type { Rule } from "./src/config.js";
-
-export default function myExtension(pi: ExtensionAPI) {
-  // Build allow-rules from every safe pattern.
-  const safeRules: Rule[] = SAFE_BASH_PATTERNS.map((pattern) => ({
-    action: "allow",
-    tool: "bash",
-    pattern,
-  }));
-
-  // Combine with your own deny rules for a readonly policy.
-  const readonlyPolicy = {
-    defaultAction: "deny" as const,
-    rules: [
-      { action: "allow" as const, tool: "read" },
-      { action: "allow" as const, tool: "grep" },
-      { action: "allow" as const, tool: "find" },
-      { action: "allow" as const, tool: "ls" },
-      ...safeRules,
-    ],
-  };
-
-  // Use readonlyPolicy however your extension needs it.
-  console.log(`Loaded readonly policy with ${readonlyPolicy.rules.length} rules`);
-}
-```
-
-If you have installed pi-controls via `pi install git:github.com/mcowger/pi-controls` and want to import from it in a separate extension, reference the installed package path directly:
-
-```typescript
-import { SAFE_BASH_PATTERNS } from
-  "~/.pi/agent/packages/github.com/mcowger/pi-controls/src/utils/safe-commands.js";
-```
+See [`examples/sample.jsonc`](examples/sample.jsonc) for a complete working example, and [`src/utils/safe-commands.ts`](src/utils/safe-commands.ts) for the full pattern list.
 
 ---
 

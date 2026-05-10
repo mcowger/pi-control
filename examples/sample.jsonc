@@ -38,8 +38,9 @@
 
     // ── readonly ───────────────────────────────────────────────────────────
     // Read and inspect only. No writes, no mutations, no git history changes.
-    // Bash is restricted to a curated allowlist of non-mutating commands.
-    // See src/utils/safe-commands.ts for the full pattern list.
+    // "$safe-bash" expands to ~90 allow rules for non-mutating bash commands
+    // (file reading, search, git inspection, system info, package queries).
+    // See src/utils/safe-commands.ts for the full list.
     "readonly": {
       "defaultAction": "deny",
       "rules": [
@@ -53,52 +54,8 @@
         { "action": "deny", "tool": "write" },
         { "action": "deny", "tool": "edit" },
 
-        // ── Safe bash commands ─────────────────────────────────────────────
-        // File reading
-        { "action": "allow", "tool": "bash", "pattern": "cat *" },
-        { "action": "allow", "tool": "bash", "pattern": "head *" },
-        { "action": "allow", "tool": "bash", "pattern": "tail *" },
-        { "action": "allow", "tool": "bash", "pattern": "wc *" },
-        { "action": "allow", "tool": "bash", "pattern": "stat *" },
-        { "action": "allow", "tool": "bash", "pattern": "file *" },
-        { "action": "allow", "tool": "bash", "pattern": "du *" },
-        { "action": "allow", "tool": "bash", "pattern": "df *" },
-        { "action": "allow", "tool": "bash", "pattern": "find *" },
-        // Search
-        { "action": "allow", "tool": "bash", "pattern": "grep *" },
-        { "action": "allow", "tool": "bash", "pattern": "rg *" },
-        // Text processing
-        { "action": "allow", "tool": "bash", "pattern": "sort *" },
-        { "action": "allow", "tool": "bash", "pattern": "uniq *" },
-        { "action": "allow", "tool": "bash", "pattern": "cut *" },
-        { "action": "allow", "tool": "bash", "pattern": "diff *" },
-        { "action": "allow", "tool": "bash", "pattern": "jq *" },
-        { "action": "allow", "tool": "bash", "pattern": "yq *" },
-        // Git read-only
-        { "action": "allow", "tool": "bash", "pattern": "git status" },
-        { "action": "allow", "tool": "bash", "pattern": "git status *" },
-        { "action": "allow", "tool": "bash", "pattern": "git log" },
-        { "action": "allow", "tool": "bash", "pattern": "git log *" },
-        { "action": "allow", "tool": "bash", "pattern": "git diff" },
-        { "action": "allow", "tool": "bash", "pattern": "git diff *" },
-        { "action": "allow", "tool": "bash", "pattern": "git show *" },
-        { "action": "allow", "tool": "bash", "pattern": "git branch" },
-        { "action": "allow", "tool": "bash", "pattern": "git branch *" },
-        { "action": "allow", "tool": "bash", "pattern": "git blame *" },
-        // System info
-        { "action": "allow", "tool": "bash", "pattern": "echo *" },
-        { "action": "allow", "tool": "bash", "pattern": "pwd" },
-        { "action": "allow", "tool": "bash", "pattern": "ls" },
-        { "action": "allow", "tool": "bash", "pattern": "ls *" },
-        { "action": "allow", "tool": "bash", "pattern": "which *" },
-        { "action": "allow", "tool": "bash", "pattern": "env" },
-        { "action": "allow", "tool": "bash", "pattern": "env *" },
-        { "action": "allow", "tool": "bash", "pattern": "uname *" },
-        // Package info (no install/uninstall)
-        { "action": "allow", "tool": "bash", "pattern": "npm list *" },
-        { "action": "allow", "tool": "bash", "pattern": "npm info *" },
-        { "action": "allow", "tool": "bash", "pattern": "pip list *" },
-        { "action": "allow", "tool": "bash", "pattern": "pip show *" }
+        // Expand to the full built-in list of safe bash patterns.
+        "$safe-bash"
       ]
     },
 

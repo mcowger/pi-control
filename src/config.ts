@@ -14,6 +14,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import stripJsonComments from "strip-json-comments";
+import { SAFE_BASH_PATTERNS } from "./utils/safe-commands.js";
 
 // ─── Schema types ─────────────────────────────────────────────────────────────
 
@@ -25,9 +26,41 @@ export interface Rule {
 	pattern?: string; // bash only
 }
 
+/**
+ * A rule entry in a policy. Can be a Rule object or a named preset string.
+ *
+ * Available presets:
+ *   "$safe-bash" — expands to allow rules for all safe/read-only bash commands
+ */
+export type RuleEntry = Rule | "$safe-bash";
+
 export interface Policy {
 	defaultAction: Action;
-	rules: Rule[];
+	rules: RuleEntry[];
+}
+
+// ─── Preset expansion ─────────────────────────────────────────────────────────
+
+const PRESETS: Record<string, Rule[]> = {
+	"$safe-bash": SAFE_BASH_PATTERNS.map((pattern) => ({
+		action: "allow",
+		tool: "bash",
+		pattern,
+	})),
+};
+
+function expandRules(rules: RuleEntry[]): Rule[] {
+	return rules.flatMap((entry) =>
+		typeof entry === "string" ? (PRESETS[entry] ?? []) : [entry]
+	);
+}
+
+function expandPolicies(policies: Record<string, Policy>): Record<string, Policy> {
+	const expanded: Record<string, Policy> = {};
+	for (const [name, policy] of Object.entries(policies)) {
+		expanded[name] = { ...policy, rules: expandRules(policy.rules) };
+	}
+	return expanded;
 }
 
 export interface ControlsConfig {
@@ -128,7 +161,8 @@ export class ControlsConfigLoader {
 			if (localCfg) deepMerge(merged, localCfg as Record<string, unknown>);
 		}
 
-		this.resolved = merged as unknown as ControlsResolvedConfig;
+		const raw = merged as unknown as ControlsResolvedConfig;
+		this.resolved = { ...raw, policies: expandPolicies(raw.policies) };
 	}
 
 	getConfig(): ControlsResolvedConfig {
