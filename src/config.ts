@@ -26,33 +26,30 @@ export interface Rule {
 	pattern?: string; // bash only
 }
 
-/**
- * A rule entry in a policy. Can be a Rule object or a named preset string.
- *
- * Available presets:
- *   "$safe-bash" — expands to allow rules for all safe/read-only bash commands
- */
-export type RuleEntry = Rule | "$safe-bash";
-
 export interface Policy {
 	defaultAction: Action;
-	rules: RuleEntry[];
+	rules: Rule[];
 }
 
 // ─── Preset expansion ─────────────────────────────────────────────────────────
+//
+// A rule with pattern "$safe-bash" expands to one allow rule per safe command.
+// Example: { "action": "allow", "tool": "bash", "pattern": "$safe-bash" }
 
-const PRESETS: Record<string, Rule[]> = {
-	"$safe-bash": SAFE_BASH_PATTERNS.map((pattern) => ({
-		action: "allow",
-		tool: "bash",
-		pattern,
-	})),
+const PATTERN_PRESETS: Record<string, string[]> = {
+	"$safe-bash": SAFE_BASH_PATTERNS,
 };
 
-function expandRules(rules: RuleEntry[]): Rule[] {
-	return rules.flatMap((entry) =>
-		typeof entry === "string" ? (PRESETS[entry] ?? []) : [entry]
-	);
+function expandRules(rules: Rule[]): Rule[] {
+	return rules.flatMap((rule) => {
+		if (rule.pattern && rule.pattern in PATTERN_PRESETS) {
+			return PATTERN_PRESETS[rule.pattern].map((pattern) => ({
+				...rule,
+				pattern,
+			}));
+		}
+		return [rule];
+	});
 }
 
 function expandPolicies(policies: Record<string, Policy>): Record<string, Policy> {

@@ -55,7 +55,7 @@
         { "action": "deny", "tool": "edit" },
 
         // Expand to the full built-in list of safe bash patterns.
-        "$safe-bash"
+        { "action": "allow", "tool": "bash", "pattern": "$safe-bash" }
       ]
     },
 

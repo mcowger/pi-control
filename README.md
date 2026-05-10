@@ -361,7 +361,7 @@ Place `"$safe-bash"` as an entry in `rules`. It mixes freely with regular rule o
         { "action": "allow", "tool": "ls" },
         { "action": "deny",  "tool": "write" },
         { "action": "deny",  "tool": "edit" },
-        "$safe-bash" // expands to ~90 allow rules for safe bash commands
+        { "action": "allow", "tool": "bash", "pattern": "$safe-bash" } // expands to ~90 rules
       ]
     }
   }
