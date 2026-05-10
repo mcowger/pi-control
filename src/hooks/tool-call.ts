@@ -1,4 +1,5 @@
 import type { ExtensionContext, ToolCallEvent, ToolCallEventResult } from "@earendil-works/pi-coding-agent";
+import type { ControlsMode } from "../index.js";
 import type { ControlsResolvedConfig, Action } from "../config.js";
 import { resolvePolicy } from "../utils/location.js";
 import { matchRule, mostRestrictive } from "../utils/matching.js";
@@ -23,13 +24,16 @@ function notifyDecision(
 	toolName: string,
 	command: string | null,
 	policyName: string | null,
+	mode: ControlsMode = "enforce",
 ): void {
-	// Only notify for non-allow decisions — allow is silent.
-	if (action === "allow") return;
+	// In inform mode show everything (including allow) so user sees the full picture.
+	// In enforce mode, allow is silent — only show non-allow decisions.
+	if (mode !== "inform" && action === "allow") return;
 	const policy = policyName ? ` [${policyName}]` : "";
 	const cmd = command ? `: ${command.slice(0, 80)}` : "";
+	const modeTag = mode === "inform" ? " (inform)" : "";
 	const type = action === "deny" ? "error" : action === "ask" ? "warning" : "info";
-	ctx.ui.notify(`pi-controls: ${action}${policy}${cmd}`, type);
+	ctx.ui.notify(`pi-controls: ${action}${policy}${cmd}${modeTag}`, type);
 }
 
 async function executeAction(
@@ -66,6 +70,7 @@ export async function handleToolCall(
 	event: ToolCallEvent,
 	ctx: ExtensionContext,
 	config: ControlsResolvedConfig,
+	mode: ControlsMode = "enforce",
 ): Promise<ToolCallEventResult | undefined> {
 	const cwd = ctx.cwd;
 
@@ -103,7 +108,8 @@ export async function handleToolCall(
 
 		const finalAction = mostRestrictive(actions);
 		await logDecision({ ts: new Date().toISOString(), tool: "bash", command: cmd, cwd, targets, policyName, action: finalAction });
-		notifyDecision(ctx, finalAction, "bash", cmd, policyName);
+		notifyDecision(ctx, finalAction, "bash", cmd, policyName, mode);
+		if (mode === "inform") return undefined;
 		return executeAction(finalAction, "bash", cmd, ctx);
 	}
 
@@ -127,6 +133,7 @@ export async function handleToolCall(
 
 	const finalAction = mostRestrictive(actions);
 	await logDecision({ ts: new Date().toISOString(), tool: event.toolName, cwd, targets, policyName, action: finalAction });
-	notifyDecision(ctx, finalAction, event.toolName, null, policyName);
+	notifyDecision(ctx, finalAction, event.toolName, null, policyName, mode);
+	if (mode === "inform") return undefined;
 	return executeAction(finalAction, event.toolName, null, ctx);
 }
