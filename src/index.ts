@@ -1,30 +1,11 @@
-import { Text } from "@earendil-works/pi-tui";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createConfigLoader } from "./config.js";
-import { makeHandleToolCall, MESSAGE_TYPE, type DecisionDetails } from "./hooks/tool-call.js";
+import { handleToolCall } from "./hooks/tool-call.js";
 import { initBashParser } from "./utils/bash-ast.js";
 import { logStartup } from "./utils/logger.js";
 
-const ACTION_COLOR: Record<string, string> = {
-	allow: "success",
-	deny:  "error",
-	ask:   "warning",
-	log:   "muted",
-	pass:  "dim",
-};
-
 export default async function piControls(pi: ExtensionAPI): Promise<void> {
 	const loader = createConfigLoader();
-	const handleToolCall = makeHandleToolCall(pi);
-
-	// Render decision messages inline in the conversation — not sent to the LLM.
-	pi.registerMessageRenderer(MESSAGE_TYPE, (message, _options, theme) => {
-		const d = message.details as DecisionDetails;
-		const color = ACTION_COLOR[d.action] ?? "dim";
-		const label = d.policyName ? `${d.action} [${d.policyName}]` : d.action;
-		const suffix = d.command ? `: ${d.command.slice(0, 80)}` : "";
-		return new Text(theme.fg(color, `pi-controls: ${label}${suffix}`), 0, 0);
-	});
 
 	pi.on("session_start", async (_event, ctx) => {
 		await initBashParser((msg) => {
