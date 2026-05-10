@@ -1,6 +1,11 @@
 import { normalizePath } from "./path.js";
 import type { ControlsResolvedConfig, Policy } from "../config.js";
 
+export interface ResolvedPolicy {
+	policy: Policy;
+	name: string;
+}
+
 /**
  * Given a target path and the loaded config, return the applicable Policy
  * (most specific matching location wins). Returns null if no location matches
@@ -10,7 +15,7 @@ export function resolvePolicy(
 	targetPath: string,
 	cwd: string,
 	config: ControlsResolvedConfig,
-): Policy | null {
+): ResolvedPolicy | null {
 	const normalTarget = normalizePath(targetPath, cwd);
 
 	let bestMatch: string | null = null;
@@ -43,12 +48,14 @@ export function resolvePolicy(
 		: null;
 
 	if (policyName) {
-		return config.policies[policyName] ?? null;
+		const policy = config.policies[policyName];
+		return policy ? { policy, name: policyName } : null;
 	}
 
 	// Fall back to the global defaultPolicy.
 	if (config.defaultPolicy) {
-		return config.policies[config.defaultPolicy] ?? null;
+		const policy = config.policies[config.defaultPolicy];
+		return policy ? { policy, name: config.defaultPolicy } : null;
 	}
 
 	return null;
