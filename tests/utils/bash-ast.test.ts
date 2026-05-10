@@ -73,4 +73,16 @@ describe("parseCommand", () => {
 		const stages = await parseCommand("git status");
 		expect(stages[0].pathArgs).toHaveLength(0);
 	});
+
+	// Regression: 2>/dev/null was treated as a file redirect target, causing
+	// /dev/null to be checked against location policies and denied.
+	it("does not extract numeric fd redirects like 2>/dev/null as redirect files", async () => {
+		const stages = await parseCommand("ls /tmp 2>/dev/null");
+		expect(stages[0].redirectFiles).toHaveLength(0);
+	});
+
+	it("still extracts plain stdout redirects as redirect files", async () => {
+		const stages = await parseCommand("ls /tmp > /tmp/out.txt");
+		expect(stages[0].redirectFiles).toContain("/tmp/out.txt");
+	});
 });

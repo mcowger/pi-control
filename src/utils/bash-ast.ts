@@ -91,9 +91,9 @@ function extractFromNode(node: ASTNode, stages: CommandStage[]): void {
 			const pathArgs: string[] = [];
 			for (const item of node.suffix ?? []) {
 				if (item.type === "Redirect") {
-					// Skip fd-to-fd redirects like 2>&1 (op contains &)
-					const isFdRedirect = item.op?.text?.includes("&");
-					if (!isFdRedirect && item.file?.text) redirectFiles.push(item.file.text);
+					// Skip redirects with a numeric fd source (e.g. 2>/dev/null, 2>&1).
+					const hasFdSource = item.numberIo !== undefined && item.numberIo !== null;
+					if (!hasFdSource && item.file?.text) redirectFiles.push(item.file.text);
 				} else if (item.type === "Word" && item.text !== undefined) {
 					const text = (item as ASTNode & { text: string }).text;
 					parts.push(text);
