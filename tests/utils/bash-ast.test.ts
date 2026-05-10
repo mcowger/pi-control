@@ -39,4 +39,38 @@ describe("parseCommand", () => {
 		expect(stages).toHaveLength(1);
 		expect(stages[0].command).toBe("ls");
 	});
+
+	// Bug: path args like ~ were not extracted, so location resolution
+	// always fell back to CWD instead of checking the actual target path.
+	it("extracts ~ as a path arg", async () => {
+		const stages = await parseCommand("ls -la ~");
+		expect(stages[0].pathArgs).toContain("~");
+	});
+
+	it("extracts absolute path args", async () => {
+		const stages = await parseCommand("cat /etc/hosts");
+		expect(stages[0].pathArgs).toContain("/etc/hosts");
+	});
+
+	it("extracts multiple path args", async () => {
+		const stages = await parseCommand("rm /tmp/foo /home/user/bar");
+		expect(stages[0].pathArgs).toContain("/tmp/foo");
+		expect(stages[0].pathArgs).toContain("/home/user/bar");
+	});
+
+	it("extracts ./ and ../ path args", async () => {
+		const stages = await parseCommand("cp ./src ../dest");
+		expect(stages[0].pathArgs).toContain("./src");
+		expect(stages[0].pathArgs).toContain("../dest");
+	});
+
+	it("does not extract flags as path args", async () => {
+		const stages = await parseCommand("ls -la --color=auto");
+		expect(stages[0].pathArgs).toHaveLength(0);
+	});
+
+	it("does not extract bare words as path args", async () => {
+		const stages = await parseCommand("git status");
+		expect(stages[0].pathArgs).toHaveLength(0);
+	});
 });

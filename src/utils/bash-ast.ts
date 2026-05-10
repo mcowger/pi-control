@@ -13,6 +13,8 @@ export interface CommandStage {
 	command: string;
 	/** File paths from redirect targets (e.g. `> /tmp/out.txt`). */
 	redirectFiles: string[];
+	/** Path-like non-flag arguments (e.g. `~`, `/tmp/foo`, `./bar`). */
+	pathArgs: string[];
 }
 
 // bash-parser is CJS with no type declarations — import dynamically.
@@ -60,6 +62,19 @@ export async function initBashParser(onWarning: (msg: string) => void): Promise<
 	}
 }
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Returns true for tokens that are likely filesystem paths rather than flags or bare words. */
+function isPathLike(token: string): boolean {
+	return (
+		token === "~" ||
+		token.startsWith("~/") ||
+		token.startsWith("/") ||
+		token.startsWith("./") ||
+		token.startsWith("../")
+	);
+}
+
 // ─── AST traversal ────────────────────────────────────────────────────────────
 
 function extractFromNode(node: ASTNode, stages: CommandStage[]): void {
@@ -73,16 +88,20 @@ function extractFromNode(node: ASTNode, stages: CommandStage[]): void {
 			if (node.name?.text) parts.push(node.name.text);
 
 			const redirectFiles: string[] = [];
+			const pathArgs: string[] = [];
 			for (const item of node.suffix ?? []) {
 				if (item.type === "Redirect") {
 					// Skip fd-to-fd redirects like 2>&1 (op contains &)
 					const isFdRedirect = item.op?.text?.includes("&");
 					if (!isFdRedirect && item.file?.text) redirectFiles.push(item.file.text);
 				} else if (item.type === "Word" && item.text !== undefined) {
-					parts.push((item as ASTNode & { text: string }).text);
+					const text = (item as ASTNode & { text: string }).text;
+					parts.push(text);
+					// Collect path-like args for location resolution.
+					if (isPathLike(text)) pathArgs.push(text);
 				}
 			}
-			stages.push({ command: parts.join(" "), redirectFiles });
+			stages.push({ command: parts.join(" "), redirectFiles, pathArgs });
 			break;
 		}
 
@@ -119,11 +138,11 @@ export async function parseCommand(command: string): Promise<CommandStage[]> {
 
 function regexFallback(command: string): CommandStage[] {
 	const tokenRe = /"([^"]*)"|'([^']*)'|(\S+)/g;
-	const tokens: string[] = [];
+	const pathArgs: string[] = [];
 	let m: RegExpExecArray | null;
 	while ((m = tokenRe.exec(command)) !== null) {
 		const tok = m[1] ?? m[2] ?? m[3] ?? "";
-		if (!tok.startsWith("-")) tokens.push(tok);
+		if (isPathLike(tok)) pathArgs.push(tok);
 	}
-	return [{ command, redirectFiles: [] }];
+	return [{ command, redirectFiles: [], pathArgs }];
 }
