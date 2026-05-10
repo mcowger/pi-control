@@ -31,9 +31,15 @@ function notifyDecision(
 	if (mode !== "inform" && action === "allow") return;
 	const policy = policyName ? ` [${policyName}]` : "";
 	const cmd = command ? `: ${command.slice(0, 80)}` : "";
-	const modeTag = mode === "inform" ? " (inform)" : "";
-	const type = action === "deny" ? "error" : action === "ask" ? "warning" : "info";
-	ctx.ui.notify(`pi-controls: ${action}${policy}${cmd}${modeTag}`, type);
+	// In inform mode: prefix non-allow actions with "would-" and always use info
+	// so it's clear nothing was actually blocked.
+	const label = mode === "inform" && action !== "allow"
+		? `would-${action}`
+		: action;
+	const type = mode === "inform"
+		? "info"
+		: action === "deny" ? "error" : action === "ask" ? "warning" : "info";
+	ctx.ui.notify(`pi-controls: ${label}${policy}${cmd}`, type);
 }
 
 async function executeAction(
