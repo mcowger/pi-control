@@ -19,6 +19,7 @@ When the agent tries to run a bash command, read a file, write to a path, or cal
 - [Rule Matching and Specificity](#rule-matching-and-specificity)
 - [Multi-Target Resolution](#multi-target-resolution)
 - [Bash Command Parsing](#bash-command-parsing)
+- [Safe Command Patterns](#safe-command-patterns)
 - [Examples](#examples)
   - [Protect production configs](#protect-production-configs)
   - [Audit-only mode](#audit-only-mode)
@@ -323,6 +324,89 @@ Each pipeline stage (`|`, `&&`, `;`) is evaluated independently. The most restri
 **If parsing fails** (malformed input), pi-controls falls back to a regex tokenizer that treats the raw command string as a single stage with no redirect targets. This is conservative — the command is still checked against the CWD policy.
 
 **If bash-parser fails to load at startup**, a warning is shown in the pi UI and the regex fallback is used for all bash calls.
+
+---
+
+## Safe Command Patterns
+
+`src/utils/safe-commands.ts` exports `SAFE_BASH_PATTERNS` — a curated list of ~90 bash command glob patterns that are considered read-only / non-mutating. The list is intentionally conservative: commands that can mutate files under certain flags (e.g. `sed -i`, `awk` with output redirection) are excluded.
+
+Patterns are grouped by category:
+
+| Category | Examples |
+|----------|----------|
+| File reading | `cat *`, `head *`, `tail *`, `xxd *` |
+| File metadata | `ls *`, `stat *`, `du *`, `df *`, `find *` |
+| Search | `grep *`, `rg *`, `ag *` |
+| Text processing | `wc *`, `sort *`, `diff *`, `jq *`, `yq *` |
+| Git (read-only) | `git status`, `git log *`, `git diff *`, `git blame *` |
+| System info | `echo *`, `env`, `which *`, `ps *`, `uname *` |
+| Package info | `npm list *`, `pip show *`, `bun pm ls *` |
+
+### Using patterns in a JSONC config
+
+Copy the rules you need from [`examples/sample.jsonc`](examples/sample.jsonc), which already includes the full safe list inline under the `readonly` policy. You only need the patterns relevant to your use case — there is no need to include all of them.
+
+```jsonc
+{
+  "policies": {
+    "readonly": {
+      "defaultAction": "deny",
+      "rules": [
+        { "action": "allow", "tool": "read" },
+        { "action": "allow", "tool": "grep" },
+        { "action": "allow", "tool": "find" },
+        { "action": "allow", "tool": "ls" },
+        // Add only the bash patterns you actually need:
+        { "action": "allow", "tool": "bash", "pattern": "git log *" },
+        { "action": "allow", "tool": "bash", "pattern": "git diff *" },
+        { "action": "allow", "tool": "bash", "pattern": "cat *" }
+      ]
+    }
+  }
+}
+```
+
+### Using patterns in a TypeScript extension
+
+If you are building a TypeScript pi extension that sits alongside pi-controls (e.g. in the same repo or a fork), you can import `SAFE_BASH_PATTERNS` directly and map it to rules programmatically rather than duplicating the list by hand.
+
+```typescript
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { SAFE_BASH_PATTERNS } from "./src/utils/safe-commands.js";
+import type { Rule } from "./src/config.js";
+
+export default function myExtension(pi: ExtensionAPI) {
+  // Build allow-rules from every safe pattern.
+  const safeRules: Rule[] = SAFE_BASH_PATTERNS.map((pattern) => ({
+    action: "allow",
+    tool: "bash",
+    pattern,
+  }));
+
+  // Combine with your own deny rules for a readonly policy.
+  const readonlyPolicy = {
+    defaultAction: "deny" as const,
+    rules: [
+      { action: "allow" as const, tool: "read" },
+      { action: "allow" as const, tool: "grep" },
+      { action: "allow" as const, tool: "find" },
+      { action: "allow" as const, tool: "ls" },
+      ...safeRules,
+    ],
+  };
+
+  // Use readonlyPolicy however your extension needs it.
+  console.log(`Loaded readonly policy with ${readonlyPolicy.rules.length} rules`);
+}
+```
+
+If you have installed pi-controls via `pi install git:github.com/mcowger/pi-controls` and want to import from it in a separate extension, reference the installed package path directly:
+
+```typescript
+import { SAFE_BASH_PATTERNS } from
+  "~/.pi/agent/packages/github.com/mcowger/pi-controls/src/utils/safe-commands.js";
+```
 
 ---
 
