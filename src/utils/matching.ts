@@ -10,12 +10,25 @@ function matchTool(pattern: string, toolName: string): boolean {
 
 /**
  * Match a bash command string against a command pattern (e.g. "git commit *").
- * We convert single `*` → `**` so the wildcard spans slashes and spaces.
+ *
+ * Uses a simple regex conversion rather than minimatch: command strings are not
+ * filesystem paths, so minimatch's path-segment semantics break on commands
+ * like `find /deep/path -name *.md` where slashes and spaces are just chars.
+ *
+ * `*` matches any sequence of characters (including spaces, slashes, dots).
+ * `?` matches any single character.
  */
 function matchCommand(pattern: string, command: string): boolean {
-	// Replace `*` that is NOT already `**` with `**`.
-	const expanded = pattern.replace(/(?<!\*)\*(?!\*)/g, "**");
-	return minimatch(command, expanded, { nocase: false, dot: true });
+	const reSource = pattern
+		.split(/([*?])/)
+		.map((part, i, arr) => {
+			const token = arr[i];
+			if (token === "*") return ".*";
+			if (token === "?") return ".";
+			return part.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+		})
+		.join("");
+	return new RegExp(`^${reSource}$`).test(command);
 }
 
 // ─── Specificity scoring ─────────────────────────────────────────────────────

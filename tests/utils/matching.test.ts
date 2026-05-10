@@ -88,4 +88,23 @@ describe("matchRule", () => {
 	it("non-bash tool with log action proceeds", () => {
 		expect(matchRule(strictPolicy, "read", null)).toBe("log");
 	});
+
+	// Regression: minimatch treated command strings as file paths, so patterns
+	// like "find *" failed to match commands with deep absolute paths because
+	// minimatch's ** doesn't span the leading / in path segments.
+	it("matches find with a deep absolute path argument", () => {
+		const policy: Policy = {
+			defaultAction: "deny",
+			rules: [{ action: "allow", tool: "bash", pattern: "find *" }],
+		};
+		expect(matchRule(policy, "bash", "find /a/b/c/d -type f -name *.md")).toBe("allow");
+	});
+
+	it("matches cat with an absolute path argument", () => {
+		const policy: Policy = {
+			defaultAction: "deny",
+			rules: [{ action: "allow", tool: "bash", pattern: "cat *" }],
+		};
+		expect(matchRule(policy, "bash", "cat /etc/hosts")).toBe("allow");
+	});
 });
