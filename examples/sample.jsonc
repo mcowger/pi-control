@@ -72,8 +72,9 @@
   // ── Locations ─────────────────────────────────────────────────────────────
   // Maps filesystem paths to policies. Most specific (longest) path wins.
   "locations": {
-    // Replace with your actual working directory.
-    "/home/user/myproject": "cwd",
+    // "$cwd" is a special location key that resolves to the directory pi was
+    // started from. It matches that directory and anything nested inside it.
+    "$cwd": "cwd",
 
     // /tmp is scratch space — unrestricted.
     "/tmp": "open",

@@ -21,7 +21,8 @@ export function resolvePolicy(
 	let bestMatch: string | null = null;
 
 	for (const locationPath of Object.keys(config.locations)) {
-		const normalLocation = normalizePath(locationPath, cwd);
+		// "$cwd" is a special key that resolves to the directory pi was started in.
+		const normalLocation = locationPath === "$cwd" ? cwd : normalizePath(locationPath, cwd);
 
 		// Target must be equal to or nested inside the location directory.
 		if (
@@ -41,7 +42,8 @@ export function resolvePolicy(
 	const policyName = bestMatch
 		? (() => {
 				for (const [k, v] of Object.entries(config.locations)) {
-					if (normalizePath(k, cwd) === bestMatch) return v;
+					const normalK = k === "$cwd" ? cwd : normalizePath(k, cwd);
+					if (normalK === bestMatch) return v;
 				}
 				return null;
 			})()

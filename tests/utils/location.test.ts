@@ -52,3 +52,41 @@ describe("resolvePolicy", () => {
 		expect(resolvePolicy("/var/log/syslog", cwd, cfg)).toBeNull();
 	});
 });
+
+describe("resolvePolicy — cwd special location key", () => {
+	const cwdPath = "/home/user/myproject";
+	const cwdConfig: ControlsResolvedConfig = {
+		policies: {
+			project: { defaultAction: "allow", rules: [] },
+			locked:  { defaultAction: "deny",  rules: [] },
+		},
+		locations: {
+			"$cwd": "project",
+			"/tmp": "locked",
+		},
+		defaultPolicy: "locked",
+	};
+
+	it("matches the cwd directory itself", () => {
+		expect(resolvePolicy(cwdPath, cwdPath, cwdConfig)?.name).toBe("project");
+	});
+
+	it("matches a path nested inside cwd", () => {
+		expect(resolvePolicy(`${cwdPath}/src/index.ts`, cwdPath, cwdConfig)?.name).toBe("project");
+	});
+
+	it("does not match a sibling directory", () => {
+		expect(resolvePolicy("/home/user/otherproject", cwdPath, cwdConfig)?.name).toBe("locked");
+	});
+
+	it("$cwd key loses to a longer explicit path (most-specific wins)", () => {
+		const cfg: ControlsResolvedConfig = {
+			...cwdConfig,
+			locations: {
+				"$cwd": "project",
+				[`${cwdPath}/src`]: "locked",
+			},
+		};
+		expect(resolvePolicy(`${cwdPath}/src/index.ts`, cwdPath, cfg)?.name).toBe("locked");
+	});
+});

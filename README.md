@@ -228,6 +228,17 @@ A **location** maps a filesystem path to a policy name. The most specific (longe
 
 A tool call targeting `/home/user/work/secret-project/src/main.ts` matches all three locations, but `/home/user/work/secret-project` is longest, so `strict` applies.
 
+The special key `"$cwd"` resolves dynamically to whatever directory pi was started from:
+
+```jsonc
+{
+  "locations": {
+    "$cwd": "strict",  // matches the directory pi was launched in
+    "/tmp": "open"
+  }
+}
+```
+
 **Fallback:** if no location matches, the global `defaultPolicy` is used. If that is also unset (or `null`), the call proceeds unrestricted (fail-open).
 
 ```json
