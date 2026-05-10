@@ -1,4 +1,4 @@
-import type { ExtensionContext, ToolCallEvent, ToolCallEventResult } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolCallEventResult } from "@earendil-works/pi-coding-agent";
 import type { ControlsResolvedConfig, Action } from "../config.js";
 import { resolvePolicy } from "../utils/location.js";
 import { matchRule, mostRestrictive } from "../utils/matching.js";
@@ -6,18 +6,13 @@ import { normalizePath } from "../utils/path.js";
 import { parseCommand } from "../utils/bash-ast.js";
 import { logDecision } from "../utils/logger.js";
 
-const STATUS_KEY = "pi-controls";
+export const MESSAGE_TYPE = "pi-controls-decision";
 
-function statusText(ctx: ExtensionContext, action: Action | "pass"): string {
-	const theme = ctx.ui.theme;
-	const prefix = "pi-controls:";
-	switch (action) {
-		case "allow": return theme.fg("dim", `${prefix} allow`);
-		case "deny":  return theme.fg("error", `${prefix} deny`);
-		case "ask":   return theme.fg("warning", `${prefix} ask`);
-		case "log":   return theme.fg("muted", `${prefix} log`);
-		case "pass":  return theme.fg("dim", `${prefix} pass`);
-	}
+export interface DecisionDetails {
+	action: Action | "pass";
+	tool: string;
+	command?: string;
+	policyName: string | null;
 }
 
 function getTargetPaths(event: ToolCallEvent, cwd: string): string[] {
@@ -29,6 +24,15 @@ function getTargetPaths(event: ToolCallEvent, cwd: string): string[] {
 		}
 	}
 	return [cwd];
+}
+
+function emitDecision(pi: ExtensionAPI, details: DecisionDetails): void {
+	pi.sendMessage({
+		customType: MESSAGE_TYPE,
+		content: "",
+		display: true,
+		details,
+	});
 }
 
 async function executeAction(
@@ -60,76 +64,85 @@ async function executeAction(
 		case "deny":
 			return {
 				block: true,
-				reason: `[pi-controls] Denied by policy: ${toolName}${command ? ` (${command.slice(0, 80)})` : ""}`,
+				reason: `[pi-controls] Access denied by policy: ${toolName}${command ? ` (${command.slice(0, 80)})` : ""}. This is a policy enforcement decision — do not retry with alternative paths or rephrased commands.`,
 			};
 	}
 }
 
-export async function handleToolCall(
-	event: ToolCallEvent,
-	ctx: ExtensionContext,
-	config: ControlsResolvedConfig,
-): Promise<ToolCallEventResult | undefined> {
-	const cwd = ctx.cwd;
+export function makeHandleToolCall(pi: ExtensionAPI) {
+	return async function handleToolCall(
+		event: ToolCallEvent,
+		ctx: ExtensionContext,
+		config: ControlsResolvedConfig,
+	): Promise<ToolCallEventResult | undefined> {
+		const cwd = ctx.cwd;
 
-	// ── Bash ─────────────────────────────────────────────────────────────────
-	if (event.toolName === "bash") {
-		const input = event.input as { command: string };
-		const stages = await parseCommand(input.command);
-		const cmd = stages.map((s) => s.command).join(" | ");
+		// ── Bash ─────────────────────────────────────────────────────────────────
+		if (event.toolName === "bash") {
+			const input = event.input as { command: string };
+			const stages = await parseCommand(input.command);
+			const cmd = stages.map((s) => s.command).join(" | ");
 
+			const actions: Action[] = [];
+			const targets: string[] = [];
+			let policyName: string | null = null;
+
+			for (const stage of stages) {
+				// Targets: redirect files + path args — fall back to CWD only if neither present.
+				const explicitPaths = [
+					...stage.redirectFiles,
+					...stage.pathArgs,
+				].map((f) => normalizePath(f, cwd));
+				const stageTargets = explicitPaths.length > 0 ? explicitPaths : [cwd];
+
+				for (const target of stageTargets) {
+					targets.push(target);
+					const resolved = resolvePolicy(target, cwd, config);
+					if (resolved) {
+						policyName = resolved.name;
+						actions.push(matchRule(resolved.policy, "bash", stage.command));
+					}
+				}
+			}
+
+			if (actions.length === 0) {
+				const details: DecisionDetails = { action: "pass", tool: "bash", command: cmd, policyName: null };
+				await logDecision({ ts: new Date().toISOString(), tool: "bash", command: cmd, cwd, targets, policyName: null, action: "pass" });
+				emitDecision(pi, details);
+				return undefined;
+			}
+
+			const finalAction = mostRestrictive(actions);
+			const details: DecisionDetails = { action: finalAction, tool: "bash", command: cmd, policyName };
+			await logDecision({ ts: new Date().toISOString(), tool: "bash", command: cmd, cwd, targets, policyName, action: finalAction });
+			emitDecision(pi, details);
+			return executeAction(finalAction, "bash", cmd, ctx);
+		}
+
+		// ── Non-bash ──────────────────────────────────────────────────────────────
+		const targets = getTargetPaths(event, cwd);
 		const actions: Action[] = [];
-		const targets: string[] = [];
 		let policyName: string | null = null;
 
-		for (const stage of stages) {
-			const stageTargets = stage.redirectFiles.length > 0
-				? stage.redirectFiles.map((f) => normalizePath(f, cwd))
-				: [cwd];
-
-			for (const target of stageTargets) {
-				targets.push(target);
-				const resolved = resolvePolicy(target, cwd, config);
-				if (resolved) {
-					policyName = resolved.name;
-					actions.push(matchRule(resolved.policy, "bash", stage.command));
-				}
+		for (const target of targets) {
+			const resolved = resolvePolicy(target, cwd, config);
+			if (resolved) {
+				policyName = resolved.name;
+				actions.push(matchRule(resolved.policy, event.toolName, null));
 			}
 		}
 
 		if (actions.length === 0) {
-			await logDecision({ ts: new Date().toISOString(), tool: "bash", command: cmd, cwd, targets, policyName: null, action: "pass" });
-			ctx.ui.setStatus(STATUS_KEY, statusText(ctx, "pass"));
+			const details: DecisionDetails = { action: "pass", tool: event.toolName, policyName: null };
+			await logDecision({ ts: new Date().toISOString(), tool: event.toolName, cwd, targets, policyName: null, action: "pass" });
+			emitDecision(pi, details);
 			return undefined;
 		}
 
 		const finalAction = mostRestrictive(actions);
-		await logDecision({ ts: new Date().toISOString(), tool: "bash", command: cmd, cwd, targets, policyName, action: finalAction });
-		ctx.ui.setStatus(STATUS_KEY, statusText(ctx, finalAction));
-		return executeAction(finalAction, "bash", cmd, ctx);
-	}
-
-	// ── Non-bash ──────────────────────────────────────────────────────────────
-	const targets = getTargetPaths(event, cwd);
-	const actions: Action[] = [];
-	let policyName: string | null = null;
-
-	for (const target of targets) {
-		const resolved = resolvePolicy(target, cwd, config);
-		if (resolved) {
-			policyName = resolved.name;
-			actions.push(matchRule(resolved.policy, event.toolName, null));
-		}
-	}
-
-	if (actions.length === 0) {
-		await logDecision({ ts: new Date().toISOString(), tool: event.toolName, cwd, targets, policyName: null, action: "pass" });
-		ctx.ui.setStatus(STATUS_KEY, statusText(ctx, "pass"));
-		return undefined;
-	}
-
-	const finalAction = mostRestrictive(actions);
-	await logDecision({ ts: new Date().toISOString(), tool: event.toolName, cwd, targets, policyName, action: finalAction });
-	ctx.ui.setStatus(STATUS_KEY, statusText(ctx, finalAction));
-	return executeAction(finalAction, event.toolName, null, ctx);
+		const details: DecisionDetails = { action: finalAction, tool: event.toolName, policyName };
+		await logDecision({ ts: new Date().toISOString(), tool: event.toolName, cwd, targets, policyName, action: finalAction });
+		emitDecision(pi, details);
+		return executeAction(finalAction, event.toolName, null, ctx);
+	};
 }
