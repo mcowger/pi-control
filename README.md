@@ -81,6 +81,16 @@ pi remove git:github.com/mcowger/pi-controls --local  # project-local
 
 ---
 
+## Behavior With No Config
+
+If no config file is found at startup, pi-controls fails open — all tool calls proceed unrestricted. A warning notification is shown in the pi UI to make clear the extension is active but unconfigured:
+
+> `[pi-controls] No config found — all tool calls are unrestricted. Create ~/.pi/agent/extensions/pi-controls.jsonc to enforce policies.`
+
+The startup entry in `~/.pi/agent/extensions/pi-controls.log` will show `loaded: 0 policies, 0 locations, defaultPolicy=null`.
+
+---
+
 ## Quick Start
 
 Create `~/.pi/agent/extensions/pi-controls.json`:

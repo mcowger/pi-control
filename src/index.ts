@@ -40,6 +40,12 @@ export default async function piControls(pi: ExtensionAPI): Promise<void> {
 			await logStartup(
 				`loaded: ${policyCount} policies, ${locationCount} locations, defaultPolicy=${config.defaultPolicy ?? "null"}`,
 			);
+			if (policyCount === 0 && locationCount === 0) {
+				ctx.ui.notify(
+					"[pi-controls] No config found — all tool calls are unrestricted. Create ~/.pi/agent/extensions/pi-controls.jsonc to enforce policies.",
+					"warning",
+				);
+			}
 		} catch (err) {
 			const msg = `failed to load config: ${err}`;
 			ctx.ui.notify(`[pi-controls] ${msg}`, "error");
