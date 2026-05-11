@@ -107,4 +107,19 @@ describe("matchRule", () => {
 		};
 		expect(matchRule(policy, "bash", "cat /etc/hosts")).toBe("allow");
 	});
+
+	// Regression: git commit -m with a multi-line body passes newlines in the
+	// command string. The `.*` in the converted pattern regex must use the
+	// dotAll (`s`) flag so it crosses newline boundaries; without it,
+	// `git commit*` silently failed to match and the rule was never triggered,
+	// letting the commit through without asking for confirmation.
+	it("matches git commit with a multi-line commit message", () => {
+		const policy: Policy = {
+			defaultAction: "allow",
+			rules: [{ action: "ask", tool: "bash", pattern: "git commit*" }],
+		};
+		const multiLineCommit =
+			'git commit -m "feat: do something\n\n- detail one\n- detail two"';
+		expect(matchRule(policy, "bash", multiLineCommit)).toBe("ask");
+	});
 });

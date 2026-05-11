@@ -28,7 +28,7 @@ function matchCommand(pattern: string, command: string): boolean {
 			return part.replace(/[.+^${}()|[\]\\]/g, "\\$&");
 		})
 		.join("");
-	return new RegExp(`^${reSource}$`).test(command);
+	return new RegExp(`^${reSource}$`, "s").test(command);
 }
 
 // ─── Specificity scoring ─────────────────────────────────────────────────────
