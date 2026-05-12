@@ -22,7 +22,8 @@ export function resolvePolicy(
 
 	for (const locationPath of Object.keys(config.locations)) {
 		// "$cwd" is a special key that resolves to the directory pi was started in.
-		const normalLocation = locationPath === "$cwd" ? cwd : normalizePath(locationPath, cwd);
+		const normalLocation =
+			locationPath === "$cwd" ? cwd : normalizePath(locationPath, cwd);
 
 		// Target must be equal to or nested inside the location directory.
 		if (

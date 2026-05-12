@@ -45,11 +45,14 @@ interface ASTNode {
 let parserFn: BashParserFn | null = null;
 let parserUnavailable = false;
 
-export async function initBashParser(onWarning: (msg: string) => void): Promise<void> {
+export async function initBashParser(
+	onWarning: (msg: string) => void,
+): Promise<void> {
 	try {
 		const mod = await import("bash-parser");
 		const fn = mod.default ?? mod;
-		if (typeof fn !== "function") throw new Error("bash-parser: no default export");
+		if (typeof fn !== "function")
+			throw new Error("bash-parser: no default export");
 		// Smoke-test.
 		fn("echo test");
 		parserFn = fn as BashParserFn;
@@ -57,7 +60,7 @@ export async function initBashParser(onWarning: (msg: string) => void): Promise<
 		parserUnavailable = true;
 		onWarning(
 			`[pi-controls] bash-parser failed to load (${err}). ` +
-			"Falling back to regex tokenizer for bash command analysis.",
+				"Falling back to regex tokenizer for bash command analysis.",
 		);
 	}
 }
@@ -92,8 +95,10 @@ function extractFromNode(node: ASTNode, stages: CommandStage[]): void {
 			for (const item of node.suffix ?? []) {
 				if (item.type === "Redirect") {
 					// Skip redirects with a numeric fd source (e.g. 2>/dev/null, 2>&1).
-					const hasFdSource = item.numberIo !== undefined && item.numberIo !== null;
-					if (!hasFdSource && item.file?.text) redirectFiles.push(item.file.text);
+					const hasFdSource =
+						item.numberIo !== undefined && item.numberIo !== null;
+					if (!hasFdSource && item.file?.text)
+						redirectFiles.push(item.file.text);
 				} else if (item.type === "Word" && item.text !== undefined) {
 					const text = (item as ASTNode & { text: string }).text;
 					parts.push(text);

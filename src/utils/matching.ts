@@ -1,7 +1,7 @@
 import { minimatch } from "minimatch";
 import type { Action, Policy, Rule } from "../config.js";
 
-// ─── Glob helpers ────────────────────────────────────────────────────────────
+// ─── Glob helpers ───────────────────────────────────────────────────────────────
 
 /** Match a tool name against a tool glob pattern (e.g. "github_*"). */
 function matchTool(pattern: string, toolName: string): boolean {
@@ -31,7 +31,7 @@ function matchCommand(pattern: string, command: string): boolean {
 	return new RegExp(`^${reSource}$`, "s").test(command);
 }
 
-// ─── Specificity scoring ─────────────────────────────────────────────────────
+// ─── Specificity scoring ──────────────────────────────────────────────────────
 
 /**
  * Count literal characters before the first wildcard (`*` or `?`).
@@ -50,6 +50,13 @@ const ACTION_PRIORITY: Record<Action, number> = {
 	log: 3,
 };
 
+/** Result of matching a rule — action plus optional pattern that matched. */
+export interface MatchResult {
+	action: Action;
+	/** For bash with a pattern match, the specific pattern that matched. */
+	matchedPattern?: string;
+}
+
 // ─── Rule matching ────────────────────────────────────────────────────────────
 
 /**
@@ -61,36 +68,51 @@ export function matchRule(
 	toolName: string,
 	command: string | null, // null for non-bash tools
 ): Action {
+	return matchRuleWithDetails(policy, toolName, command).action;
+}
+
+/**
+ * Like matchRule but also returns which pattern matched (for bash).
+ */
+export function matchRuleWithDetails(
+	policy: Policy,
+	toolName: string,
+	command: string | null, // null for non-bash tools
+): MatchResult {
 	let bestScore = -1;
 	let bestPriority = Number.MAX_SAFE_INTEGER;
 	let bestAction: Action | null = null;
-
+	let bestPattern: string | undefined;
 	for (const rule of policy.rules) {
 		// Tool glob must match.
 		if (!matchTool(rule.tool, toolName)) continue;
 
 		// For bash, the command pattern must also match (if specified).
+		let patternMatched = false;
 		if (toolName === "bash" && rule.pattern !== undefined) {
-			if (command === null || !matchCommand(rule.pattern, command)) continue;
+			patternMatched = command !== null && matchCommand(rule.pattern, command);
+			if (!patternMatched) continue;
 		}
 
-		const scorePattern = toolName === "bash" && rule.pattern !== undefined
-			? rule.pattern
-			: rule.tool;
+		const scorePattern =
+			toolName === "bash" && rule.pattern !== undefined
+				? rule.pattern
+				: rule.tool;
 		const score = specificityScore(scorePattern);
 		const priority = ACTION_PRIORITY[rule.action];
 
-		if (
-			score > bestScore ||
-			(score === bestScore && priority < bestPriority)
-		) {
+		if (score > bestScore || (score === bestScore && priority < bestPriority)) {
 			bestScore = score;
 			bestPriority = priority;
 			bestAction = rule.action;
+			bestPattern = patternMatched ? rule.pattern : undefined;
 		}
 	}
 
-	return bestAction ?? policy.defaultAction;
+	return {
+		action: bestAction ?? policy.defaultAction,
+		matchedPattern: bestPattern,
+	};
 }
 
 // ─── Multi-target resolution ──────────────────────────────────────────────────

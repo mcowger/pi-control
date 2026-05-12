@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { matchRule, mostRestrictive, specificityScore } from "../../src/utils/matching.js";
+import {
+	matchRule,
+	mostRestrictive,
+	specificityScore,
+} from "../../src/utils/matching.js";
 import type { Policy } from "../../src/config.js";
 
 describe("specificityScore", () => {
@@ -97,7 +101,9 @@ describe("matchRule", () => {
 			defaultAction: "deny",
 			rules: [{ action: "allow", tool: "bash", pattern: "find *" }],
 		};
-		expect(matchRule(policy, "bash", "find /a/b/c/d -type f -name *.md")).toBe("allow");
+		expect(matchRule(policy, "bash", "find /a/b/c/d -type f -name *.md")).toBe(
+			"allow",
+		);
 	});
 
 	it("matches cat with an absolute path argument", () => {

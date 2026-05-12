@@ -27,11 +27,15 @@ describe("resolvePolicy", () => {
 	});
 
 	it("returns the most specific location (project over user home)", () => {
-		expect(resolvePolicy("/home/user/project/src/file.ts", cwd, config)?.policy).toBe(strict);
+		expect(
+			resolvePolicy("/home/user/project/src/file.ts", cwd, config)?.policy,
+		).toBe(strict);
 	});
 
 	it("falls back to parent location", () => {
-		expect(resolvePolicy("/home/user/other/file.ts", cwd, config)?.policy).toBe(relaxed);
+		expect(resolvePolicy("/home/user/other/file.ts", cwd, config)?.policy).toBe(
+			relaxed,
+		);
 	});
 
 	it("returns null when no location matches and no defaultPolicy", () => {
@@ -48,7 +52,10 @@ describe("resolvePolicy", () => {
 	});
 
 	it("returns null for unknown defaultPolicy name", () => {
-		const cfg: ControlsResolvedConfig = { ...config, defaultPolicy: "nonexistent" };
+		const cfg: ControlsResolvedConfig = {
+			...config,
+			defaultPolicy: "nonexistent",
+		};
 		expect(resolvePolicy("/var/log/syslog", cwd, cfg)).toBeNull();
 	});
 });
@@ -58,10 +65,10 @@ describe("resolvePolicy — cwd special location key", () => {
 	const cwdConfig: ControlsResolvedConfig = {
 		policies: {
 			project: { defaultAction: "allow", rules: [] },
-			locked:  { defaultAction: "deny",  rules: [] },
+			locked: { defaultAction: "deny", rules: [] },
 		},
 		locations: {
-			"$cwd": "project",
+			$cwd: "project",
 			"/tmp": "locked",
 		},
 		defaultPolicy: "locked",
@@ -72,21 +79,27 @@ describe("resolvePolicy — cwd special location key", () => {
 	});
 
 	it("matches a path nested inside cwd", () => {
-		expect(resolvePolicy(`${cwdPath}/src/index.ts`, cwdPath, cwdConfig)?.name).toBe("project");
+		expect(
+			resolvePolicy(`${cwdPath}/src/index.ts`, cwdPath, cwdConfig)?.name,
+		).toBe("project");
 	});
 
 	it("does not match a sibling directory", () => {
-		expect(resolvePolicy("/home/user/otherproject", cwdPath, cwdConfig)?.name).toBe("locked");
+		expect(
+			resolvePolicy("/home/user/otherproject", cwdPath, cwdConfig)?.name,
+		).toBe("locked");
 	});
 
 	it("$cwd key loses to a longer explicit path (most-specific wins)", () => {
 		const cfg: ControlsResolvedConfig = {
 			...cwdConfig,
 			locations: {
-				"$cwd": "project",
+				$cwd: "project",
 				[`${cwdPath}/src`]: "locked",
 			},
 		};
-		expect(resolvePolicy(`${cwdPath}/src/index.ts`, cwdPath, cfg)?.name).toBe("locked");
+		expect(resolvePolicy(`${cwdPath}/src/index.ts`, cwdPath, cfg)?.name).toBe(
+			"locked",
+		);
 	});
 });

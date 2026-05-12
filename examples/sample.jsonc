@@ -1,91 +1,89 @@
 {
-  // pi-controls sample configuration
-  //
-  // Place this file at one of:
-  //   Global:        ~/.pi/agent/extensions/pi-controls.jsonc
-  //   Project-local: .pi/extensions/pi-controls.jsonc
-  //
-  // Both files are merged at startup; project-local wins on conflict.
-  //
-  // Replace /home/user/myproject below with your actual working directory.
-  // All other paths are used as-is.
+	// pi-controls sample configuration
+	//
+	// Place this file at one of:
+	//   Global:        ~/.pi/agent/extensions/pi-controls.jsonc
+	//   Project-local: .pi/extensions/pi-controls.jsonc
+	//
+	// Both files are merged at startup; project-local wins on conflict.
+	//
+	// Replace /home/user/myproject below with your actual working directory.
+	// All other paths are used as-is.
 
-  "policies": {
+	"policies": {
+		// ── cwd ────────────────────────────────────────────────────────────────
+		// Full access inside the working project, except git commit and git push
+		// require explicit confirmation.
+		"cwd": {
+			"defaultAction": "allow",
+			"rules": [
+				// Force-push is always blocked — too destructive to allow interactively.
+				{ "action": "deny", "tool": "bash", "pattern": "git push --force*" },
+				{ "action": "deny", "tool": "bash", "pattern": "git push -f*" },
 
-    // ── cwd ────────────────────────────────────────────────────────────────
-    // Full access inside the working project, except git commit and git push
-    // require explicit confirmation.
-    "cwd": {
-      "defaultAction": "allow",
-      "rules": [
-        // Force-push is always blocked — too destructive to allow interactively.
-        { "action": "deny", "tool": "bash", "pattern": "git push --force*" },
-        { "action": "deny", "tool": "bash", "pattern": "git push -f*" },
+				// Regular push and commit require confirmation.
+				// More specific rules (higher score) win over the allow-all default.
+				{ "action": "ask", "tool": "bash", "pattern": "git push*" },
+				{ "action": "ask", "tool": "bash", "pattern": "git commit*" }
+			]
+		},
 
-        // Regular push and commit require confirmation.
-        // More specific rules (higher score) win over the allow-all default.
-        { "action": "ask", "tool": "bash", "pattern": "git push*" },
-        { "action": "ask", "tool": "bash", "pattern": "git commit*" }
-      ]
-    },
+		// ── open ───────────────────────────────────────────────────────────────
+		// Fully permissive — no restrictions. Used for scratch/temp space.
+		"open": {
+			"defaultAction": "allow",
+			"rules": []
+		},
 
-    // ── open ───────────────────────────────────────────────────────────────
-    // Fully permissive — no restrictions. Used for scratch/temp space.
-    "open": {
-      "defaultAction": "allow",
-      "rules": []
-    },
+		// ── readonly ───────────────────────────────────────────────────────────
+		// Read and inspect only. No writes, no mutations, no git history changes.
+		// "$safe-bash" expands to ~90 allow rules for non-mutating bash commands
+		// (file reading, search, git inspection, system info, package queries).
+		// See src/utils/safe-commands.ts for the full list.
+		"readonly": {
+			"defaultAction": "deny",
+			"rules": [
+				// File inspection tools.
+				{ "action": "allow", "tool": "read" },
+				{ "action": "allow", "tool": "grep" },
+				{ "action": "allow", "tool": "find" },
+				{ "action": "allow", "tool": "ls" },
 
-    // ── readonly ───────────────────────────────────────────────────────────
-    // Read and inspect only. No writes, no mutations, no git history changes.
-    // "$safe-bash" expands to ~90 allow rules for non-mutating bash commands
-    // (file reading, search, git inspection, system info, package queries).
-    // See src/utils/safe-commands.ts for the full list.
-    "readonly": {
-      "defaultAction": "deny",
-      "rules": [
-        // File inspection tools.
-        { "action": "allow", "tool": "read" },
-        { "action": "allow", "tool": "grep" },
-        { "action": "allow", "tool": "find" },
-        { "action": "allow", "tool": "ls" },
+				// Writes and edits are always blocked in a readonly zone.
+				{ "action": "deny", "tool": "write" },
+				{ "action": "deny", "tool": "edit" },
 
-        // Writes and edits are always blocked in a readonly zone.
-        { "action": "deny", "tool": "write" },
-        { "action": "deny", "tool": "edit" },
+				// Expand to the full built-in list of safe bash patterns.
+				{ "action": "allow", "tool": "bash", "pattern": "$safe-bash" }
+			]
+		},
 
-        // Expand to the full built-in list of safe bash patterns.
-        { "action": "allow", "tool": "bash", "pattern": "$safe-bash" }
-      ]
-    },
+		// ── locked ─────────────────────────────────────────────────────────────
+		// Hard deny for everything. Applied via defaultPolicy to any path that
+		// is not explicitly covered by a location entry above.
+		"locked": {
+			"defaultAction": "deny",
+			"rules": []
+		}
+	},
 
-    // ── locked ─────────────────────────────────────────────────────────────
-    // Hard deny for everything. Applied via defaultPolicy to any path that
-    // is not explicitly covered by a location entry above.
-    "locked": {
-      "defaultAction": "deny",
-      "rules": []
-    }
+	// ── Locations ─────────────────────────────────────────────────────────────
+	// Maps filesystem paths to policies. Most specific (longest) path wins.
+	"locations": {
+		// "$cwd" is a special location key that resolves to the directory pi was
+		// started from. It matches that directory and anything nested inside it.
+		"$cwd": "cwd",
 
-  },
+		// /tmp is scratch space — unrestricted.
+		"/tmp": "open",
 
-  // ── Locations ─────────────────────────────────────────────────────────────
-  // Maps filesystem paths to policies. Most specific (longest) path wins.
-  "locations": {
-    // "$cwd" is a special location key that resolves to the directory pi was
-    // started from. It matches that directory and anything nested inside it.
-    "$cwd": "cwd",
+		// ~/workspace is a read/inspect-only zone.
+		// ~ is expanded at runtime.
+		"~/workspace": "readonly"
+	},
 
-    // /tmp is scratch space — unrestricted.
-    "/tmp": "open",
-
-    // ~/workspace is a read/inspect-only zone.
-    // ~ is expanded at runtime.
-    "~/workspace": "readonly"
-  },
-
-  // ── Global fallback ───────────────────────────────────────────────────────
-  // Any path not matched by a location entry above uses this policy.
-  // Set to null (or remove this field) to fail-open instead.
-  "defaultPolicy": "locked"
+	// ── Global fallback ───────────────────────────────────────────────────────
+	// Any path not matched by a location entry above uses this policy.
+	// Set to null (or remove this field) to fail-open instead.
+	"defaultPolicy": "locked"
 }

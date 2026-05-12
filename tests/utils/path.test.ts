@@ -22,7 +22,9 @@ describe("expandHome", () => {
 
 describe("normalizePath", () => {
 	it("resolves relative paths against cwd", () => {
-		expect(normalizePath("foo", "/home/user/project")).toBe("/home/user/project/foo");
+		expect(normalizePath("foo", "/home/user/project")).toBe(
+			"/home/user/project/foo",
+		);
 	});
 
 	it("expands ~ and returns absolute path", () => {

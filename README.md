@@ -222,6 +222,42 @@ Each rule has:
 
 `defaultAction` follows the same four behaviors and is used when no rule in the policy matches the current tool call.
 
+### Feedback Messages
+
+When pi-controls blocks, asks, or warns about a tool call, the message includes context to help the LLM understand what triggered the decision:
+
+**Deny (bash with pattern match):**
+```
+Access denied by policy: bash (git commit -m "...") — pattern: "git commit *". Avoid the blocked pattern in any retry.
+```
+
+**Deny (bash with path restriction):**
+```
+Access denied by policy: bash (...) — blocked path: "~/.config". Avoid the blocked pattern in any retry.
+```
+
+**Deny (non-bash tool):**
+```
+Access denied by policy: write — blocked path: "/etc/secrets". Avoid the blocked pattern in any retry.
+```
+
+**Ask (confirmation prompt):**
+```
+Allow bash? — pattern: "git push *"
+  └─ git push origin main
+```
+
+**Inform mode (would-block preview):**
+```
+would-deny [policy]: git commit -m "..." — pattern: "git commit *"
+```
+
+The context includes:
+- **`blocked path(s)`**: Which filesystem paths triggered the denial (for bash redirect targets, path arguments, or non-bash tool paths)
+- **`pattern`**: Which rule pattern matched and caused the action (for bash commands)
+
+This helps the LLM correct its approach without guessing — it knows exactly which path or pattern to avoid.
+
 ### Locations
 
 A **location** maps a filesystem path to a policy name. The most specific (longest) matching path wins.

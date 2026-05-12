@@ -52,7 +52,9 @@ function expandRules(rules: Rule[]): Rule[] {
 	});
 }
 
-function expandPolicies(policies: Record<string, Policy>): Record<string, Policy> {
+function expandPolicies(
+	policies: Record<string, Policy>,
+): Record<string, Policy> {
 	const expanded: Record<string, Policy> = {};
 	for (const [name, policy] of Object.entries(policies)) {
 		expanded[name] = { ...policy, rules: expandRules(policy.rules) };
@@ -119,13 +121,19 @@ function findLocalPath(): string | null {
 
 // ─── Deep merge ───────────────────────────────────────────────────────────────
 
-function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): void {
+function deepMerge(
+	target: Record<string, unknown>,
+	source: Record<string, unknown>,
+): void {
 	for (const key of Object.keys(source)) {
 		const sv = source[key];
 		if (sv === undefined) continue;
 		if (sv !== null && typeof sv === "object" && !Array.isArray(sv)) {
 			if (!target[key] || typeof target[key] !== "object") target[key] = {};
-			deepMerge(target[key] as Record<string, unknown>, sv as Record<string, unknown>);
+			deepMerge(
+				target[key] as Record<string, unknown>,
+				sv as Record<string, unknown>,
+			);
 		} else {
 			target[key] = sv;
 		}

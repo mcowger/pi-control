@@ -25,7 +25,9 @@ export default async function piControls(pi: ExtensionAPI): Promise<void> {
 	const loader = createConfigLoader();
 	let mode: ControlsMode = "enforce";
 
-	function setWidgetForMode(ctx: { ui: { setWidget: (id: string, lines: string[]) => void } }): void {
+	function setWidgetForMode(ctx: {
+		ui: { setWidget: (id: string, lines: string[]) => void };
+	}): void {
 		if (mode === "ignore") {
 			ctx.ui.setWidget("pi-controls-mode", ["[pi-controls: IGNORE]"]);
 		} else if (mode === "inform") {
@@ -39,9 +41,11 @@ export default async function piControls(pi: ExtensionAPI): Promise<void> {
 	pi.registerCommand("controls", {
 		description: "Set pi-controls mode: enforce | ignore | inform",
 		getArgumentCompletions: (prefix: string): AutocompleteItem[] => {
-			return MODES
-				.filter((m) => m.startsWith(prefix))
-				.map((m) => ({ value: m, label: m, description: MODE_DESCRIPTIONS[m] }));
+			return MODES.filter((m) => m.startsWith(prefix)).map((m) => ({
+				value: m,
+				label: m,
+				description: MODE_DESCRIPTIONS[m],
+			}));
 		},
 		handler: async (args, ctx) => {
 			const arg = args.trim().toLowerCase() as ControlsMode;
@@ -54,7 +58,10 @@ export default async function piControls(pi: ExtensionAPI): Promise<void> {
 			}
 			mode = arg;
 			setWidgetForMode(ctx);
-			ctx.ui.notify(`[pi-controls] Mode set to: ${mode}`, MODE_NOTIFY_TYPE[mode]);
+			ctx.ui.notify(
+				`[pi-controls] Mode set to: ${mode}`,
+				MODE_NOTIFY_TYPE[mode],
+			);
 		},
 	});
 
