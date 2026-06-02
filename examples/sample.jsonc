@@ -95,5 +95,20 @@
 	// Keyboard shortcut that cycles through enforce → ignore → inform modes.
 	// Must be a valid pi KeyId (e.g. "ctrl+shift+m", "alt+p", "ctrl+shift+z").
 	// Defaults to "ctrl+shift+m" when absent.
-	"cycleKey": "ctrl+shift+m"
+	"cycleKey": "ctrl+shift+m",
+
+	// ── Agent timeout (circuit breaker) ───────────────────────────────────────
+	// Optional. When the agent racks up `maxDenies` denied tool calls within
+	// `windowSeconds` seconds, the next denied call is escalated from a silent
+	// block to an interactive confirmation (ask). This lets you step in and
+	// redirect an agent that appears to be going rogue instead of letting it
+	// spin indefinitely against a wall of denies.
+	//
+	// The window is sliding — old events age out automatically. Escalation
+	// continues on every subsequent deny until the deny rate drops below the
+	// threshold. Remove this field (or set to null) to disable the circuit breaker.
+	"agentTimeout": {
+		"maxDenies": 3,      // escalate after 3 denies…
+		"windowSeconds": 60  // …within any 60-second rolling window
+	}
 }

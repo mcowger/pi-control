@@ -16,6 +16,7 @@ When the agent tries to run a bash command, read a file, write to a path, or cal
   - [Policies](#policies)
   - [Rules](#rules)
   - [Actions](#actions)
+  - [Agent Timeout](#agent-timeout)
   - [Locations](#locations)
 - [Rule Matching and Specificity](#rule-matching-and-specificity)
 - [Multi-Target Resolution](#multi-target-resolution)
@@ -32,6 +33,7 @@ When the agent tries to run a bash command, read a file, write to a path, or cal
   - [Redirect-aware bash policies](#redirect-aware-bash-policies)
   - [Mixed restrictiveness across pipeline stages](#mixed-restrictiveness-across-pipeline-stages)
   - [Nudge toward better tools](#nudge-toward-better-tools)
+  - [Agent timeout as a safety net](#agent-timeout-as-a-safety-net)
 - [Config Reference](#config-reference)
 - [Development](#development)
 
@@ -228,6 +230,33 @@ Each rule has:
 | `deny` | Tool call is blocked immediately. The LLM receives a reason message. |
 
 `defaultAction` follows the same behaviors and is used when no rule in the policy matches the current tool call. `"nudge"` is not valid as a `defaultAction` — it requires a `message` field which only makes sense on explicit rules.
+
+### Agent Timeout
+
+The **agent timeout** is a sliding-window circuit breaker. When an agent accumulates too many denied tool calls in a short period — a sign it may be going rogue — the next denied call is automatically escalated from a silent `deny` to an interactive `ask`. This gives you a chance to step in and redirect the agent rather than letting it spin against a wall of blocks.
+
+```jsonc
+{
+  "agentTimeout": {
+    "maxDenies": 3,      // trigger after this many denies…
+    "windowSeconds": 60  // …within this rolling window
+  }
+}
+```
+
+**How it works:**
+
+- Every time a tool call results in `deny`, the event is recorded with a timestamp.
+- Before executing the deny, pi-controls checks whether the count of deny events within the last `windowSeconds` seconds has reached `maxDenies`.
+- If yes, the action is escalated to `ask`: a confirmation dialog appears so you can approve the call, redirect the agent, or block it manually.
+- The window is **sliding** — old events age out automatically. No explicit reset is needed; the circuit breaker naturally disarms once the deny rate drops.
+- Escalation continues on every subsequent denied call until the window empties.
+
+**Escalation note:** the `ask` dialog shown during escalation is the standard pi confirmation prompt. If you approve, the tool call proceeds. If you deny it, the agent receives a block message just as it would from a normal `deny`.
+
+`agentTimeout` is optional. If absent or `null`, no escalation happens and all denies remain silent.
+
+---
 
 ### Feedback Messages
 
@@ -774,6 +803,38 @@ A warning notification is also shown in the pi UI. The LLM can act on the hint i
 
 ---
 
+### Agent timeout as a safety net
+
+Catch a rogue agent automatically: if it racks up three denied calls in a minute, escalate the next one to a manual confirmation instead of silently blocking it.
+
+```json
+{
+  "policies": {
+    "cautious": {
+      "defaultAction": "deny",
+      "rules": [
+        { "action": "allow", "tool": "read" },
+        { "action": "allow", "tool": "bash", "pattern": "git *" },
+        { "action": "ask",   "tool": "bash", "pattern": "git push *" }
+      ]
+    }
+  },
+  "locations": {
+    "$cwd": "cautious"
+  },
+  "agentTimeout": {
+    "maxDenies": 3,
+    "windowSeconds": 60
+  }
+}
+```
+
+With this config, if the agent hits three denied calls within 60 seconds — for example, trying `rm`, `curl`, and `pip install` in quick succession — the fourth denied call becomes an `ask`. You see the confirmation dialog, can review what the agent is attempting, and either allow it or block it. The escalation continues on every subsequent deny until the deny rate drops below the threshold.
+
+Pair this with a strict `defaultAction: "deny"` policy to maximize the benefit: the agent gets blocked early, and the circuit breaker kicks in before it burns too many turns.
+
+---
+
 ## Config Reference
 
 ### Top-level fields
@@ -783,6 +844,14 @@ A warning notification is also shown in the pi UI. The LLM can act on the hint i
 | `policies` | `Record<string, Policy>` | No | Named policies available for use in `locations`. |
 | `locations` | `Record<string, string>` | No | Maps filesystem paths to policy names. |
 | `defaultPolicy` | `string \| null` | No | Policy to apply when no location matches. `null` or absent = fail-open. |
+| `agentTimeout` | `AgentTimeout \| null` | No | Circuit breaker: escalate `deny` → `ask` when the deny rate exceeds the threshold. `null` or absent = disabled. |
+
+### AgentTimeout fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `maxDenies` | `number` | Yes | Number of denied calls within `windowSeconds` that triggers escalation. |
+| `windowSeconds` | `number` | Yes | Rolling window size in seconds. Events older than this are ignored. |
 
 ### Policy fields
 
@@ -835,10 +904,11 @@ src/
   hooks/
     tool-call.ts    # tool_call handler; exports pendingNudges map for nudge injection
   utils/
-    path.ts         # Path normalization and ~ expansion
-    location.ts     # Path → policy resolution
-    matching.ts     # Rule matching, specificity scoring, action resolution
-    bash-ast.ts     # bash-parser wrapper with regex fallback
+    path.ts           # Path normalization and ~ expansion
+    location.ts       # Path → policy resolution
+    matching.ts       # Rule matching, specificity scoring, action resolution
+    bash-ast.ts       # bash-parser wrapper with regex fallback
+    deny-tracker.ts   # Sliding-window deny counter for agentTimeout circuit breaker
 tests/
   hooks/
     tool-call.test.ts
@@ -847,4 +917,5 @@ tests/
     location.test.ts
     matching.test.ts
     bash-ast.test.ts
+    deny-tracker.test.ts
 ```

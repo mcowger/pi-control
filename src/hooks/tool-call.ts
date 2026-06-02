@@ -10,12 +10,19 @@ import { matchRuleWithDetails, mostRestrictive } from "../utils/matching.js";
 import { normalizePath } from "../utils/path.js";
 import { parseCommand } from "../utils/bash-ast.js";
 import { logDecision } from "../utils/logger.js";
+import { DenyTracker } from "../utils/deny-tracker.js";
 
 /**
  * Nudge messages pending injection into tool results, keyed by toolCallId.
  * Populated during tool_call handling; consumed during tool_result handling.
  */
 export const pendingNudges = new Map<string, string>();
+
+/**
+ * Sliding-window deny counter for the agentTimeout circuit breaker.
+ * Exported so tests can reset it between runs.
+ */
+export const denyTracker = new DenyTracker();
 
 function getTargetPaths(event: ToolCallEvent, cwd: string): string[] {
 	if (event.toolName === "bash") return [];
@@ -124,12 +131,46 @@ async function executeAction(
 		case "deny": {
 			const cmdPart = command ? ` (${command.slice(0, 80)})` : "";
 			const context = buildContextSuffix(deniedPaths, matchedPattern);
+			const pathNote =
+				deniedPaths.length > 0
+					? ` The restriction is on the PATH${deniedPaths.length > 1 ? "S" : ""} ${deniedPaths.map((p) => `"${p}"`).join(", ")} — not on the tool. Do NOT retry with a different tool (read, ls, glob, cat, etc.); all access to these paths is blocked.`
+					: " Do NOT retry with a different tool; this path is blocked regardless of which tool is used.";
 			return {
 				block: true,
-				reason: `[pi-controls] Access denied by policy: ${toolName}${cmdPart}${context}. Avoid the blocked pattern in any retry.`,
+				reason: `[pi-controls] Access denied by policy: ${toolName}${cmdPart}${context}.${pathNote}`,
 			};
 		}
 	}
+}
+
+/**
+ * Apply the agentTimeout circuit breaker.
+ *
+ * If the resolved action is "deny" and agentTimeout is configured:
+ *  - Record the deny in the tracker.
+ *  - If the threshold has been reached, escalate to "ask" so the user can
+ *    step in and redirect the agent rather than letting it spin.
+ *
+ * Returns the (possibly escalated) action.
+ */
+function applyAgentTimeout(
+	action: Action,
+	config: ControlsResolvedConfig,
+	ctx: ExtensionContext,
+): Action {
+	if (action !== "deny") return action;
+	const timeout = config.agentTimeout;
+	if (!timeout) return action;
+
+	denyTracker.record();
+	if (denyTracker.isTriggered(timeout.maxDenies, timeout.windowSeconds)) {
+		ctx.ui.notify(
+			`[pi-controls] agentTimeout: ${timeout.maxDenies} denies in ${timeout.windowSeconds}s — escalating to interactive confirm`,
+			"warning",
+		);
+		return "ask";
+	}
+	return action;
 }
 
 export async function handleToolCall(
@@ -229,8 +270,9 @@ export async function handleToolCall(
 			nudgeMessage,
 		);
 		if (mode === "inform") return undefined;
+		const effectiveBashAction = applyAgentTimeout(finalAction, config, ctx);
 		return executeAction(
-			finalAction,
+			effectiveBashAction,
 			"bash",
 			cmd,
 			ctx,
@@ -293,8 +335,9 @@ export async function handleToolCall(
 		nudgeMessage,
 	);
 	if (mode === "inform") return undefined;
+	const effectiveAction = applyAgentTimeout(finalAction, config, ctx);
 	return executeAction(
-		finalAction,
+		effectiveAction,
 		event.toolName,
 		null,
 		ctx,
