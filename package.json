@@ -12,19 +12,23 @@
 		"extensions": ["./src/index.ts"]
 	},
 	"dependencies": {
-		"strip-json-comments": "^5.0.1",
-		"minimatch": "^10.0.1",
+		"strip-json-comments": "^5.0.3",
+		"minimatch": "^10.2.5",
 		"bash-parser": "^0.5.0"
 	},
 	"peerDependenciesMeta": {
-		"@earendil-works/pi-coding-agent": { "optional": true },
-		"@oh-my-pi/pi-coding-agent": { "optional": true }
+		"@earendil-works/pi-coding-agent": {
+			"optional": true
+		},
+		"@oh-my-pi/pi-coding-agent": {
+			"optional": true
+		}
 	},
 	"devDependencies": {
-		"@earendil-works/pi-coding-agent": "*",
-		"@oh-my-pi/pi-coding-agent": ">=15.0.0",
+		"@earendil-works/pi-coding-agent": "^0.78.0",
+		"@oh-my-pi/pi-coding-agent": "^15.7.6",
 		"@types/bun": "latest",
 		"@biomejs/biome": "^1.9.4",
-		"typescript": "^5.6.3"
+		"typescript": "^5.9.3"
 	}
 }

@@ -130,8 +130,8 @@ export default async function piControls(pi: ExtensionAPI): Promise<void> {
 		const existing = event.content ?? [];
 		return {
 			content: [
+				{ type: "text" as const, text: `[pi-controls nudge] ${nudgeMessage}\n\n` },
 				...existing,
-				{ type: "text" as const, text: `\n[pi-controls nudge] ${nudgeMessage}` },
 			],
 		};
 	});
