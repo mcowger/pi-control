@@ -89,5 +89,11 @@
 	// ── Global fallback ───────────────────────────────────────────────────────
 	// Any path not matched by a location entry above uses this policy.
 	// Set to null (or remove this field) to fail-open instead.
-	"defaultPolicy": "locked"
+	"defaultPolicy": "locked",
+
+	// ── Mode cycle keybinding ─────────────────────────────────────────────────
+	// Keyboard shortcut that cycles through enforce → ignore → inform modes.
+	// Must be a valid pi KeyId (e.g. "ctrl+shift+m", "alt+p", "ctrl+shift+z").
+	// Defaults to "ctrl+shift+m" when absent.
+	"cycleKey": "ctrl+shift+m"
 }

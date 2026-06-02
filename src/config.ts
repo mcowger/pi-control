@@ -72,18 +72,26 @@ export interface ControlsConfig {
 	 * null / absent = fail-open (all tool calls proceed unrestricted).
 	 */
 	defaultPolicy?: string | null;
+	/**
+	 * Keyboard shortcut for cycling through enforce → ignore → inform modes.
+	 * Must be a valid pi KeyId string (e.g. "ctrl+shift+m", "alt+p").
+	 * Defaults to "ctrl+shift+m" when absent.
+	 */
+	cycleKey?: string;
 }
 
 export interface ControlsResolvedConfig {
 	policies: Record<string, Policy>;
 	locations: Record<string, string>;
 	defaultPolicy: string | null;
+	cycleKey: string;
 }
 
 const DEFAULTS: ControlsResolvedConfig = {
 	policies: {},
 	locations: {},
 	defaultPolicy: null,
+	cycleKey: "ctrl+shift+m",
 };
 
 // ─── File discovery ───────────────────────────────────────────────────────────

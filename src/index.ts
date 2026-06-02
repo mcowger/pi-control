@@ -39,6 +39,25 @@ export default async function piControls(pi: ExtensionAPI): Promise<void> {
 		}
 	}
 
+	// Load config early so we can read cycleKey before registering the shortcut.
+	// session_start will reload it again (picking up any runtime changes).
+	await loader.load();
+	const cycleKey = loader.getConfig().cycleKey;
+
+	// biome-ignore lint/suspicious/noExplicitAny: KeyId is a wide string union; cast avoids importing pi-tui directly
+	pi.registerShortcut(cycleKey as any, {
+		description: "Cycle pi-controls mode: enforce → ignore → inform",
+		handler: (ctx) => {
+			const currentIndex = MODES.indexOf(mode);
+			mode = MODES[(currentIndex + 1) % MODES.length];
+			setWidgetForMode(ctx);
+			ctx.ui.notify(
+				`[pi-controls] Mode set to: ${mode}`,
+				MODE_NOTIFY_TYPE[mode],
+			);
+		},
+	});
+
 	pi.registerCommand("controls", {
 		description: "Set pi-controls mode: enforce | ignore | inform",
 		getArgumentCompletions: (prefix: string): AutocompleteItem[] => {
