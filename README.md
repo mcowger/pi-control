@@ -91,15 +91,15 @@ pi remove git:github.com/mcowger/pi-control --local  # project-local
 
 If no config file is found at startup, pi-controls fails open — all tool calls proceed unrestricted. A warning notification is shown in the pi UI to make clear the extension is active but unconfigured:
 
-> `[pi-control] No config found — all tool calls are unrestricted. Create ~/.pi/agent/extensions/pi-control.jsonc to enforce policies.`
+> `[pi-controls] No config found — all tool calls are unrestricted. Create ~/.pi/agent/extensions/pi-controls.jsonc to enforce policies.`
 
-The startup entry in `~/.pi/agent/extensions/pi-control.log` will show `loaded: 0 policies, 0 locations, defaultPolicy=null`.
+The startup entry in `~/.pi/agent/extensions/pi-controls.log` will show `loaded: 0 policies, 0 locations, defaultPolicy=null`.
 
 ---
 
 ## Quick Start
 
-Create `~/.pi/agent/extensions/pi-control.json`:
+Create `~/.pi/agent/extensions/pi-controls.json`:
 
 ```json
 {
@@ -130,8 +130,8 @@ pi-controls loads config from two places and deep-merges them. **Project-local w
 
 | Scope | Path |
 |-------|------|
-| Global | `~/.pi/agent/extensions/pi-control.jsonc` |
-| Project-local | `.pi/extensions/pi-control.jsonc` (walks up from CWD) |
+| Global | `~/.pi/agent/extensions/pi-controls.jsonc` |
+| Project-local | `.pi/extensions/pi-controls.jsonc` (walks up from CWD) |
 
 Config files use **JSONC** (JSON with Comments), so `//` and `/* */` comments are supported. Plain `.json` is also accepted as a fallback.
 
@@ -139,7 +139,7 @@ See [`examples/sample.jsonc`](examples/sample.jsonc) for a fully annotated start
 
 This means you can define your base policies globally and override or extend them per project.
 
-**Global** (`~/.pi/agent/extensions/pi-control.jsonc`):
+**Global** (`~/.pi/agent/extensions/pi-controls.jsonc`):
 ```json
 {
   "policies": {
@@ -156,7 +156,7 @@ This means you can define your base policies globally and override or extend the
 }
 ```
 
-**Project-local** (`.pi/extensions/pi-control.jsonc` at project root):
+**Project-local** (`.pi/extensions/pi-controls.jsonc` at project root):
 ```json
 {
   "policies": {
