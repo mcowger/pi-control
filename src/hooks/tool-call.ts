@@ -124,9 +124,13 @@ async function executeAction(
 		case "deny": {
 			const cmdPart = command ? ` (${command.slice(0, 80)})` : "";
 			const context = buildContextSuffix(deniedPaths, matchedPattern);
+			const pathNote =
+				deniedPaths.length > 0
+					? ` The restriction is on the PATH${deniedPaths.length > 1 ? "S" : ""} ${deniedPaths.map((p) => `"${p}"`).join(", ")} — not on the tool. Do NOT retry with a different tool (read, ls, glob, cat, etc.); all access to these paths is blocked.`
+					: " Do NOT retry with a different tool; this path is blocked regardless of which tool is used.";
 			return {
 				block: true,
-				reason: `[pi-controls] Access denied by policy: ${toolName}${cmdPart}${context}. Avoid the blocked pattern in any retry.`,
+				reason: `[pi-controls] Access denied by policy: ${toolName}${cmdPart}${context}.${pathNote}`,
 			};
 		}
 	}
