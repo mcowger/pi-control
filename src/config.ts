@@ -64,6 +64,25 @@ function expandPolicies(
 	return expanded;
 }
 
+/**
+ * Configures automatic deny→ask escalation when the agent is denied too many
+ * times in a rolling window (the "rogue agent" circuit breaker).
+ *
+ * When the agent accumulates `maxDenies` denied tool calls within
+ * `windowSeconds` seconds, the *next* denied call is escalated from an
+ * automatic "deny" to an interactive "ask", giving the user a chance to step
+ * in and redirect the agent.
+ *
+ * The window is sliding: only denies within the last `windowSeconds` seconds
+ * count. The escalation resets as soon as the window empties.
+ */
+export interface AgentTimeout {
+	/** Number of denied calls within `windowSeconds` that triggers escalation. */
+	maxDenies: number;
+	/** Rolling window size in seconds. */
+	windowSeconds: number;
+}
+
 export interface ControlsConfig {
 	policies?: Record<string, Policy>;
 	locations?: Record<string, string>;
@@ -72,18 +91,25 @@ export interface ControlsConfig {
 	 * null / absent = fail-open (all tool calls proceed unrestricted).
 	 */
 	defaultPolicy?: string | null;
+	/**
+	 * Optional circuit-breaker: escalate deny→ask when the agent is denied
+	 * too many times in a rolling window.
+	 */
+	agentTimeout?: AgentTimeout | null;
 }
 
 export interface ControlsResolvedConfig {
 	policies: Record<string, Policy>;
 	locations: Record<string, string>;
 	defaultPolicy: string | null;
+	agentTimeout: AgentTimeout | null;
 }
 
 const DEFAULTS: ControlsResolvedConfig = {
 	policies: {},
 	locations: {},
 	defaultPolicy: null,
+	agentTimeout: null,
 };
 
 // ─── File discovery ───────────────────────────────────────────────────────────
@@ -159,7 +185,7 @@ export class ControlsConfigLoader {
 	private resolved: ControlsResolvedConfig = structuredClone(DEFAULTS);
 
 	async load(): Promise<void> {
-		const merged = structuredClone(DEFAULTS) as Record<string, unknown>;
+		const merged = structuredClone(DEFAULTS) as unknown as Record<string, unknown>;
 
 		const globalCfg = await readJsonc(findGlobalPath());
 		if (globalCfg) deepMerge(merged, globalCfg as Record<string, unknown>);

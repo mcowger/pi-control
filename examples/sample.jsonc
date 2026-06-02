@@ -89,5 +89,20 @@
 	// ── Global fallback ───────────────────────────────────────────────────────
 	// Any path not matched by a location entry above uses this policy.
 	// Set to null (or remove this field) to fail-open instead.
-	"defaultPolicy": "locked"
+	"defaultPolicy": "locked",
+
+	// ── Agent timeout (circuit breaker) ───────────────────────────────────────
+	// Optional. When the agent racks up `maxDenies` denied tool calls within
+	// `windowSeconds` seconds, the next denied call is escalated from a silent
+	// block to an interactive confirmation (ask). This lets you step in and
+	// redirect an agent that appears to be going rogue instead of letting it
+	// spin indefinitely against a wall of denies.
+	//
+	// The window is sliding — old events age out automatically. Escalation
+	// continues on every subsequent deny until the deny rate drops below the
+	// threshold. Remove this field (or set to null) to disable the circuit breaker.
+	"agentTimeout": {
+		"maxDenies": 3,      // escalate after 3 denies…
+		"windowSeconds": 60  // …within any 60-second rolling window
+	}
 }

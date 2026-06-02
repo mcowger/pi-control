@@ -1,6 +1,6 @@
-import { describe, expect, it, beforeAll, mock } from "bun:test"; // mock kept for ctx stubs
+import { describe, expect, it, beforeAll, beforeEach, mock } from "bun:test"; // mock kept for ctx stubs
 import { initBashParser } from "../../src/utils/bash-ast.js";
-import { handleToolCall, pendingNudges } from "../../src/hooks/tool-call.js";
+import { handleToolCall, pendingNudges, denyTracker } from "../../src/hooks/tool-call.js";
 import type { ControlsResolvedConfig } from "../../src/config.js";
 import type {
 	BashToolCallEvent,
@@ -61,6 +61,7 @@ const config: ControlsResolvedConfig = {
 		"/tmp": "open",
 	},
 	defaultPolicy: "locked",
+	agentTimeout: null,
 };
 
 describe("tool-call handler — path arg location resolution", () => {
@@ -143,6 +144,7 @@ describe("nudge action", () => {
 		},
 		locations: { "/tmp": "nudged" },
 		defaultPolicy: null,
+		agentTimeout: null,
 	};
 
 	it("allows the tool call (returns undefined) when action is nudge", async () => {
@@ -167,5 +169,83 @@ describe("nudge action", () => {
 		const event = toolEvent("grep", "nudge-call-3");
 		await handleToolCall(event, makeCtx("/tmp"), nudgeConfig);
 		expect(pendingNudges.has("nudge-call-3")).toBe(false);
+	});
+});
+
+describe("agentTimeout escalation (deny → ask)", () => {
+	// All calls land on /home/user which has no location → defaultPolicy=locked (deny all).
+	const timeoutConfig: ControlsResolvedConfig = {
+		policies: {
+			locked: { defaultAction: "deny", rules: [] },
+		},
+		locations: {},
+		defaultPolicy: "locked",
+		agentTimeout: { maxDenies: 3, windowSeconds: 60 },
+	};
+
+	// Config without agentTimeout — baseline to confirm deny stays deny.
+	const noTimeoutConfig: ControlsResolvedConfig = {
+		...timeoutConfig,
+		agentTimeout: null,
+	};
+
+	beforeEach(() => {
+		denyTracker.reset();
+	});
+
+	it("denies without escalation when below the threshold", async () => {
+		// First 2 denies — below maxDenies=3, no escalation.
+		const r1 = await handleToolCall(bashEvent("rm -rf /"), makeCtx("/home/user"), timeoutConfig);
+		expect(r1).toEqual({ block: true, reason: expect.stringContaining("Access denied") });
+
+		const r2 = await handleToolCall(bashEvent("rm -rf /"), makeCtx("/home/user"), timeoutConfig);
+		expect(r2).toEqual({ block: true, reason: expect.stringContaining("Access denied") });
+	});
+
+	it("escalates to ask on the Nth denied call that meets the threshold", async () => {
+		// Trigger threshold: record 3 denies — 3rd call should escalate.
+		const ctx = makeCtx("/home/user");
+		await handleToolCall(bashEvent("rm -rf /"), ctx, timeoutConfig);
+		await handleToolCall(bashEvent("rm -rf /"), ctx, timeoutConfig);
+
+		// The confirm stub returns true (user allows), so result is undefined (not blocked).
+		const r3 = await handleToolCall(bashEvent("rm -rf /"), ctx, timeoutConfig);
+		// ctx.ui.confirm was called (escalation happened); since mock returns true, not blocked.
+		expect(r3).toBeUndefined();
+		expect((ctx.ui.confirm as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+	});
+
+	it("does not escalate when agentTimeout is null", async () => {
+		// Even with 5 denies, no escalation without config.
+		const ctx = makeCtx("/home/user");
+		for (let i = 0; i < 5; i++) {
+			const r = await handleToolCall(bashEvent("rm -rf /"), ctx, noTimeoutConfig);
+			expect(r).toEqual({ block: true, reason: expect.stringContaining("Access denied") });
+		}
+		expect((ctx.ui.confirm as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+	});
+
+	it("escalates for non-bash tools too", async () => {
+		// write tool calls on /home/user → locked → deny → escalate on 3rd.
+		const ctx = makeCtx("/home/user");
+		await handleToolCall(toolEvent("write", "w1", { file_path: "/home/user/x" }), ctx, timeoutConfig);
+		await handleToolCall(toolEvent("write", "w2", { file_path: "/home/user/x" }), ctx, timeoutConfig);
+
+		const r3 = await handleToolCall(toolEvent("write", "w3", { file_path: "/home/user/x" }), ctx, timeoutConfig);
+		expect(r3).toBeUndefined(); // confirm returned true → not blocked
+		expect((ctx.ui.confirm as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+	});
+
+	it("continues escalating after the threshold is met until the window expires", async () => {
+		const ctx = makeCtx("/home/user");
+		// Reach the threshold.
+		await handleToolCall(bashEvent("rm /"), ctx, timeoutConfig);
+		await handleToolCall(bashEvent("rm /"), ctx, timeoutConfig);
+		await handleToolCall(bashEvent("rm /"), ctx, timeoutConfig); // 3rd → ask
+
+		// 4th denied call should still escalate (tracker still above threshold).
+		const r4 = await handleToolCall(bashEvent("rm /"), ctx, timeoutConfig);
+		expect(r4).toBeUndefined(); // confirm returned true
+		expect((ctx.ui.confirm as ReturnType<typeof mock>).mock.calls.length).toBe(2);
 	});
 });
