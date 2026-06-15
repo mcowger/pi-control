@@ -1,4 +1,7 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+} from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { createConfigLoader } from "./config.js";
 import { handleToolCall, pendingNudges } from "./hooks/tool-call.js";
@@ -58,31 +61,52 @@ export default async function piControls(pi: ExtensionAPI): Promise<void> {
 		},
 	});
 
-	pi.registerCommand("controls", {
-		description: "Set pi-controls mode: enforce | ignore | inform",
-		getArgumentCompletions: (prefix: string): AutocompleteItem[] => {
-			return MODES.filter((m) => m.startsWith(prefix)).map((m) => ({
-				value: m,
-				label: m,
-				description: MODE_DESCRIPTIONS[m],
-			}));
-		},
-		handler: async (args, ctx) => {
-			const arg = args.trim().toLowerCase() as ControlsMode;
-			if (!MODES.includes(arg)) {
-				ctx.ui.notify(
-					`[pi-controls] Unknown mode "${args}". Use: enforce, ignore, or inform.`,
-					"error",
-				);
-				return;
-			}
+	async function handleControlsCommand(
+		args: string,
+		ctx: ExtensionCommandContext,
+	): Promise<void> {
+		const arg = args.trim().toLowerCase() as ControlsMode;
+		if (MODES.includes(arg)) {
 			mode = arg;
 			setWidgetForMode(ctx);
 			ctx.ui.notify(
 				`[pi-controls] Mode set to: ${mode}`,
 				MODE_NOTIFY_TYPE[mode],
 			);
-		},
+			return;
+		}
+
+		// No valid mode argument — show a select popup.
+		const choice = await ctx.ui.select(
+			"[pi-controls] Select mode",
+			MODES.map((m) => `${m} — ${MODE_DESCRIPTIONS[m]}`),
+		);
+		if (!choice) return;
+		// Parse the mode from the choice label (e.g. "enforce — enforce ...").
+		const selected = choice.split(" — ")[0] as ControlsMode;
+		mode = selected;
+		setWidgetForMode(ctx);
+		ctx.ui.notify(`[pi-controls] Mode set to: ${mode}`, MODE_NOTIFY_TYPE[mode]);
+	}
+
+	const completionProvider = (prefix: string): AutocompleteItem[] => {
+		return MODES.filter((m) => m.startsWith(prefix)).map((m) => ({
+			value: m,
+			label: m,
+			description: MODE_DESCRIPTIONS[m],
+		}));
+	};
+
+	pi.registerCommand("controls", {
+		description: "Set pi-controls mode: enforce | ignore | inform",
+		getArgumentCompletions: completionProvider,
+		handler: handleControlsCommand,
+	});
+
+	pi.registerCommand("pi-control", {
+		description: "Set pi-controls mode: enforce | ignore | inform",
+		getArgumentCompletions: completionProvider,
+		handler: handleControlsCommand,
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
