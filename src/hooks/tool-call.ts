@@ -279,12 +279,12 @@ export async function handleToolCall(
 						"bash",
 						stage.command,
 					);
-				matchResults.push({
-					action: result.action,
-					matchedPattern: result.matchedPattern,
-					nudgeMessage: result.nudgeMessage,
-					ruleKey: nudgeKey("bash", result.matchedPattern),
-				});
+					matchResults.push({
+						action: result.action,
+						matchedPattern: result.matchedPattern,
+						nudgeMessage: result.nudgeMessage,
+						ruleKey: nudgeKey("bash", result.matchedPattern),
+					});
 				}
 			}
 		}
@@ -316,7 +316,8 @@ export async function handleToolCall(
 			(r) => r.action === finalAction && r.nudgeMessage !== undefined,
 		);
 		const nudgeMessage = nudgeMatch?.nudgeMessage;
-		const bashNudgeKey = nudgeMatch?.ruleKey ?? nudgeKey("bash", matchedPattern);
+		const bashNudgeKey =
+			nudgeMatch?.ruleKey ?? nudgeKey("bash", matchedPattern);
 
 		const deniedTargets = finalAction === "deny" ? targets : [];
 
@@ -348,7 +349,9 @@ export async function handleToolCall(
 			ctx,
 		);
 		const bashEscalatedFromNudge =
-			finalAction === "nudge" && effectiveBashAction === "deny" ? nudgeMessage : undefined;
+			finalAction === "nudge" && effectiveBashAction === "deny"
+				? nudgeMessage
+				: undefined;
 		return executeAction(
 			effectiveBashAction,
 			"bash",
@@ -364,14 +367,22 @@ export async function handleToolCall(
 
 	// ── Non-bash ──────────────────────────────────────────────────────────────
 	const targets = getTargetPaths(event, cwd);
-	const matchResults: { action: Action; nudgeMessage?: string; ruleKey: string }[] = [];
+	const matchResults: {
+		action: Action;
+		nudgeMessage?: string;
+		ruleKey: string;
+	}[] = [];
 	let policyName: string | null = null;
 
 	for (const target of targets) {
 		const resolved = resolvePolicy(target, cwd, config);
 		if (resolved) {
 			policyName = resolved.name;
-			const result = matchRuleWithDetails(resolved.policy, event.toolName, null);
+			const result = matchRuleWithDetails(
+				resolved.policy,
+				event.toolName,
+				null,
+			);
 			matchResults.push({
 				action: result.action,
 				nudgeMessage: result.nudgeMessage,
@@ -427,7 +438,9 @@ export async function handleToolCall(
 		ctx,
 	);
 	const escalatedFromNudge =
-		finalAction === "nudge" && effectiveAction === "deny" ? nudgeMessage : undefined;
+		finalAction === "nudge" && effectiveAction === "deny"
+			? nudgeMessage
+			: undefined;
 	return executeAction(
 		effectiveAction,
 		event.toolName,

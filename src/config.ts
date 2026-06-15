@@ -13,7 +13,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import stripJsonComments from "strip-json-comments";
-import { getAgentDir } from "./pi-compat.js";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { SAFE_BASH_PATTERNS } from "./utils/safe-commands.js";
 
 // ─── Schema types ─────────────────────────────────────────────────────────────
@@ -162,7 +162,7 @@ function findLocalPath(): string | null {
 	const home = homedir();
 	while (true) {
 		if (dir === home) break;
-		for (const dirName of [".omp", ".pi"]) {
+		for (const dirName of [".pi"]) {
 			const piDir = resolve(dir, dirName);
 			if (existsSync(piDir) && statSync(piDir).isDirectory()) {
 				for (const name of FILENAMES) {
@@ -216,7 +216,10 @@ export class ControlsConfigLoader {
 	private resolved: ControlsResolvedConfig = structuredClone(DEFAULTS);
 
 	async load(): Promise<void> {
-		const merged = structuredClone(DEFAULTS) as unknown as Record<string, unknown>;
+		const merged = structuredClone(DEFAULTS) as unknown as Record<
+			string,
+			unknown
+		>;
 
 		const globalCfg = await readJsonc(findGlobalPath());
 		if (globalCfg) deepMerge(merged, globalCfg as Record<string, unknown>);

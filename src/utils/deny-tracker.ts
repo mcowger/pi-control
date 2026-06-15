@@ -26,10 +26,17 @@ export class DenyTracker {
 	 *
 	 * Prunes expired entries as a side effect to keep memory bounded.
 	 */
-	isTriggered(maxDenies: number, windowSeconds: number, now = Date.now()): boolean {
+	isTriggered(
+		maxDenies: number,
+		windowSeconds: number,
+		now = Date.now(),
+	): boolean {
 		const cutoff = now - windowSeconds * 1000;
 		// Prune entries outside the window.
-		while (this.timestamps.length > 0 && (this.timestamps[0] as number) < cutoff) {
+		while (
+			this.timestamps.length > 0 &&
+			(this.timestamps[0] as number) < cutoff
+		) {
 			this.timestamps.shift();
 		}
 		return this.timestamps.length >= maxDenies;

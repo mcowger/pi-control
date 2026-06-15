@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { createConfigLoader } from "./config.js";
 import { handleToolCall, pendingNudges } from "./hooks/tool-call.js";
-import { getAgentDir } from "./pi-compat.js";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { initBashParser } from "./utils/bash-ast.js";
 import { logStartup } from "./utils/logger.js";
 
@@ -130,7 +130,10 @@ export default async function piControls(pi: ExtensionAPI): Promise<void> {
 		const existing = event.content ?? [];
 		return {
 			content: [
-				{ type: "text" as const, text: `[pi-controls nudge] ${nudgeMessage}\n\n` },
+				{
+					type: "text" as const,
+					text: `[pi-controls nudge] ${nudgeMessage}\n\n`,
+				},
 				...existing,
 			],
 		};

@@ -1,7 +1,7 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { Action } from "../config.js";
-import { getAgentDir } from "../pi-compat.js";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 const logPath = resolve(getAgentDir(), "extensions", "pi-controls.log");
 

@@ -31,19 +31,13 @@ bun test tests/utils/matching.test.ts
 
 `package.json` declares `"pi": { "extensions": ["./src/index.ts"] }` — this is how pi discovers and loads the extension. `src/index.ts` is the root.
 
-## Dual-compat layer (pi-compat.ts)
-
-The extension supports two pi distributions:
-- **upstream pi** (`@earendil-works/pi-coding-agent`) — agent dir: `~/.pi/agent`
-- **oh-my-pi** (`@oh-my-pi/pi-coding-agent`) — agent dir: `~/.omp/agent`
-
-`src/pi-compat.ts` tries oh-my-pi first at import time. Do not hardcode either package name or path — always go through `getAgentDir()` from `pi-compat.ts`.
-
 ## Config file discovery
 
 Config is **not** loaded from this repo's directory. The extension reads:
 1. Global: `<agentDir>/extensions/pi-controls.jsonc` (or `.json` fallback)
-2. Project-local: walks up from CWD looking for `.pi/extensions/pi-controls.jsonc` or `.omp/extensions/pi-controls.jsonc`
+2. Project-local: walks up from CWD looking for `.pi/extensions/pi-controls.jsonc`
+
+`agentDir` is obtained via `getAgentDir()` from `@earendil-works/pi-coding-agent`.
 
 Local wins on deep merge. Config is JSONC (comments allowed). The `$cwd` special key in `locations` resolves to the directory pi was launched from.
 
@@ -62,7 +56,6 @@ Local wins on deep merge. Config is JSONC (comments allowed). The `$cwd` special
 src/
   index.ts           # Extension root; registers session_start, tool_call, tool_result, /controls command
   config.ts          # Schema types, JSONC loader, deep merge, $safe-bash expansion
-  pi-compat.ts       # oh-my-pi / upstream pi dual-compat; always use getAgentDir() from here
   hooks/
     tool-call.ts     # Main policy enforcement logic; exports pendingNudges map
   utils/

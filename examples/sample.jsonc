@@ -30,13 +30,46 @@
 				// The message is prepended to the tool result so the LLM sees it
 				// before any output. The tool call still runs — nothing is blocked.
 				// Pair with nudgeTimeout below to auto-escalate if hints are ignored.
-				{ "action": "nudge", "tool": "read",  "message": "Prefer pluck_read for repo files — outline mode + semantic context, far cheaper than a raw read." },
-				{ "action": "nudge", "tool": "grep",  "message": "Prefer pluck_grep for repo content search — same ripgrep behavior, kept inside the index." },
-				{ "action": "nudge", "tool": "bash", "pattern": "cat *",    "message": "Prefer pluck_read over cat for repo files (raw:true for exact bytes)." },
-				{ "action": "nudge", "tool": "bash", "pattern": "grep *",   "message": "Prefer pluck_grep over grep for repo text search." },
-				{ "action": "nudge", "tool": "bash", "pattern": "rg *",     "message": "Prefer pluck_grep over rg for repo text search." },
-				{ "action": "nudge", "tool": "bash", "pattern": "head *",   "message": "Prefer pluck_read (lines:\"A-B\") over head for repo files." },
-				{ "action": "nudge", "tool": "bash", "pattern": "tail *",   "message": "Prefer pluck_read (lines:\"A-B\") over tail for repo files." }
+				{
+					"action": "nudge",
+					"tool": "read",
+					"message": "Prefer pluck_read for repo files — outline mode + semantic context, far cheaper than a raw read."
+				},
+				{
+					"action": "nudge",
+					"tool": "grep",
+					"message": "Prefer pluck_grep for repo content search — same ripgrep behavior, kept inside the index."
+				},
+				{
+					"action": "nudge",
+					"tool": "bash",
+					"pattern": "cat *",
+					"message": "Prefer pluck_read over cat for repo files (raw:true for exact bytes)."
+				},
+				{
+					"action": "nudge",
+					"tool": "bash",
+					"pattern": "grep *",
+					"message": "Prefer pluck_grep over grep for repo text search."
+				},
+				{
+					"action": "nudge",
+					"tool": "bash",
+					"pattern": "rg *",
+					"message": "Prefer pluck_grep over rg for repo text search."
+				},
+				{
+					"action": "nudge",
+					"tool": "bash",
+					"pattern": "head *",
+					"message": "Prefer pluck_read (lines:\"A-B\") over head for repo files."
+				},
+				{
+					"action": "nudge",
+					"tool": "bash",
+					"pattern": "tail *",
+					"message": "Prefer pluck_read (lines:\"A-B\") over tail for repo files."
+				}
 			]
 		},
 
@@ -55,12 +88,20 @@
 		"readonly": {
 			"defaultAction": "deny",
 			"rules": [
-			// "nudge" allows the tool call but prepends the message to the tool result
-			// so the LLM sees the reminder before any output. A single warning line
-			// also appears in the pi UI. The call is never blocked — the agent always
-			// gets its result. Pair with nudgeTimeout to escalate repeated ignoring.
-				{ "action": "nudge", "tool": "read", "message": "Prefer pluck_read for repo files — it provides outline mode and semantic context." },
-				{ "action": "nudge", "tool": "grep", "message": "Prefer pluck_grep for content search inside the repo — it understands code structure." },
+				// "nudge" allows the tool call but prepends the message to the tool result
+				// so the LLM sees the reminder before any output. A single warning line
+				// also appears in the pi UI. The call is never blocked — the agent always
+				// gets its result. Pair with nudgeTimeout to escalate repeated ignoring.
+				{
+					"action": "nudge",
+					"tool": "read",
+					"message": "Prefer pluck_read for repo files — it provides outline mode and semantic context."
+				},
+				{
+					"action": "nudge",
+					"tool": "grep",
+					"message": "Prefer pluck_grep for content search inside the repo — it understands code structure."
+				},
 
 				// No better alternative for these — plain allow.
 				{ "action": "allow", "tool": "find" },
@@ -121,8 +162,8 @@
 	// continues on every subsequent deny until the deny rate drops below the
 	// threshold. Remove this field (or set to null) to disable the circuit breaker.
 	"agentTimeout": {
-		"maxDenies": 3,      // escalate after 3 denies…
-		"windowSeconds": 60  // …within any 60-second rolling window
+		"maxDenies": 3, // escalate after 3 denies…
+		"windowSeconds": 60 // …within any 60-second rolling window
 	},
 
 	// ── Nudge timeout (circuit breaker) ───────────────────────────────────────
@@ -139,7 +180,7 @@
 	// chances rather than locking it out permanently. Remove this field (or set
 	// to null) to disable escalation and keep nudges as soft hints indefinitely.
 	"nudgeTimeout": {
-		"maxNudges": 3,      // escalate after 3 ignored nudges for the same rule…
-		"windowSeconds": 60  // …within any 60-second rolling window
+		"maxNudges": 3, // escalate after 3 ignored nudges for the same rule…
+		"windowSeconds": 60 // …within any 60-second rolling window
 	}
 }

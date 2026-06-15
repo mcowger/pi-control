@@ -19,14 +19,10 @@
 	"peerDependenciesMeta": {
 		"@earendil-works/pi-coding-agent": {
 			"optional": true
-		},
-		"@oh-my-pi/pi-coding-agent": {
-			"optional": true
 		}
 	},
 	"devDependencies": {
-		"@earendil-works/pi-coding-agent": "^0.78.0",
-		"@oh-my-pi/pi-coding-agent": "^15.7.6",
+		"@earendil-works/pi-coding-agent": "^0.78.1",
 		"@types/bun": "latest",
 		"@biomejs/biome": "^1.9.4",
 		"typescript": "^5.9.3"

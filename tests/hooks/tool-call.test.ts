@@ -1,6 +1,12 @@
 import { describe, expect, it, beforeAll, beforeEach, mock } from "bun:test"; // mock kept for ctx stubs
 import { initBashParser } from "../../src/utils/bash-ast.js";
-import { handleToolCall, pendingNudges, denyTracker, nudgeTrackers, nudgeKey } from "../../src/hooks/tool-call.js";
+import {
+	handleToolCall,
+	pendingNudges,
+	denyTracker,
+	nudgeTrackers,
+	nudgeKey,
+} from "../../src/hooks/tool-call.js";
 import type { ControlsResolvedConfig } from "../../src/config.js";
 import type {
 	BashToolCallEvent,
@@ -198,11 +204,25 @@ describe("agentTimeout escalation (deny → ask)", () => {
 
 	it("denies without escalation when below the threshold", async () => {
 		// First 2 denies — below maxDenies=3, no escalation.
-		const r1 = await handleToolCall(bashEvent("rm -rf /"), makeCtx("/home/user"), timeoutConfig);
-		expect(r1).toEqual({ block: true, reason: expect.stringContaining("Access denied") });
+		const r1 = await handleToolCall(
+			bashEvent("rm -rf /"),
+			makeCtx("/home/user"),
+			timeoutConfig,
+		);
+		expect(r1).toEqual({
+			block: true,
+			reason: expect.stringContaining("Access denied"),
+		});
 
-		const r2 = await handleToolCall(bashEvent("rm -rf /"), makeCtx("/home/user"), timeoutConfig);
-		expect(r2).toEqual({ block: true, reason: expect.stringContaining("Access denied") });
+		const r2 = await handleToolCall(
+			bashEvent("rm -rf /"),
+			makeCtx("/home/user"),
+			timeoutConfig,
+		);
+		expect(r2).toEqual({
+			block: true,
+			reason: expect.stringContaining("Access denied"),
+		});
 	});
 
 	it("escalates to ask on the Nth denied call that meets the threshold", async () => {
@@ -215,28 +235,53 @@ describe("agentTimeout escalation (deny → ask)", () => {
 		const r3 = await handleToolCall(bashEvent("rm -rf /"), ctx, timeoutConfig);
 		// ctx.ui.confirm was called (escalation happened); since mock returns true, not blocked.
 		expect(r3).toBeUndefined();
-		expect((ctx.ui.confirm as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+		expect((ctx.ui.confirm as ReturnType<typeof mock>).mock.calls.length).toBe(
+			1,
+		);
 	});
 
 	it("does not escalate when agentTimeout is null", async () => {
 		// Even with 5 denies, no escalation without config.
 		const ctx = makeCtx("/home/user");
 		for (let i = 0; i < 5; i++) {
-			const r = await handleToolCall(bashEvent("rm -rf /"), ctx, noTimeoutConfig);
-			expect(r).toEqual({ block: true, reason: expect.stringContaining("Access denied") });
+			const r = await handleToolCall(
+				bashEvent("rm -rf /"),
+				ctx,
+				noTimeoutConfig,
+			);
+			expect(r).toEqual({
+				block: true,
+				reason: expect.stringContaining("Access denied"),
+			});
 		}
-		expect((ctx.ui.confirm as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+		expect((ctx.ui.confirm as ReturnType<typeof mock>).mock.calls.length).toBe(
+			0,
+		);
 	});
 
 	it("escalates for non-bash tools too", async () => {
 		// write tool calls on /home/user → locked → deny → escalate on 3rd.
 		const ctx = makeCtx("/home/user");
-		await handleToolCall(toolEvent("write", "w1", { file_path: "/home/user/x" }), ctx, timeoutConfig);
-		await handleToolCall(toolEvent("write", "w2", { file_path: "/home/user/x" }), ctx, timeoutConfig);
+		await handleToolCall(
+			toolEvent("write", "w1", { file_path: "/home/user/x" }),
+			ctx,
+			timeoutConfig,
+		);
+		await handleToolCall(
+			toolEvent("write", "w2", { file_path: "/home/user/x" }),
+			ctx,
+			timeoutConfig,
+		);
 
-		const r3 = await handleToolCall(toolEvent("write", "w3", { file_path: "/home/user/x" }), ctx, timeoutConfig);
+		const r3 = await handleToolCall(
+			toolEvent("write", "w3", { file_path: "/home/user/x" }),
+			ctx,
+			timeoutConfig,
+		);
 		expect(r3).toBeUndefined(); // confirm returned true → not blocked
-		expect((ctx.ui.confirm as ReturnType<typeof mock>).mock.calls.length).toBe(1);
+		expect((ctx.ui.confirm as ReturnType<typeof mock>).mock.calls.length).toBe(
+			1,
+		);
 	});
 
 	it("continues escalating after the threshold is met until the window expires", async () => {
@@ -249,7 +294,9 @@ describe("agentTimeout escalation (deny → ask)", () => {
 		// 4th denied call should still escalate (tracker still above threshold).
 		const r4 = await handleToolCall(bashEvent("rm /"), ctx, timeoutConfig);
 		expect(r4).toBeUndefined(); // confirm returned true
-		expect((ctx.ui.confirm as ReturnType<typeof mock>).mock.calls.length).toBe(2);
+		expect((ctx.ui.confirm as ReturnType<typeof mock>).mock.calls.length).toBe(
+			2,
+		);
 	});
 });
 
@@ -300,8 +347,16 @@ describe("nudgeTimeout escalation (nudge → deny)", () => {
 	it("escalates to deny on the Nth nudge that meets the threshold", async () => {
 		const ctx = makeCtx("/tmp");
 		// First two: normal nudges.
-		await handleToolCall(toolEvent("read", "nt-1", { path: "/tmp/foo.ts" }), ctx, nudgeTimeoutConfig);
-		await handleToolCall(toolEvent("read", "nt-2", { path: "/tmp/foo.ts" }), ctx, nudgeTimeoutConfig);
+		await handleToolCall(
+			toolEvent("read", "nt-1", { path: "/tmp/foo.ts" }),
+			ctx,
+			nudgeTimeoutConfig,
+		);
+		await handleToolCall(
+			toolEvent("read", "nt-2", { path: "/tmp/foo.ts" }),
+			ctx,
+			nudgeTimeoutConfig,
+		);
 
 		// Third nudge hits maxNudges=3 → deny.
 		const r3 = await handleToolCall(
@@ -309,13 +364,24 @@ describe("nudgeTimeout escalation (nudge → deny)", () => {
 			ctx,
 			nudgeTimeoutConfig,
 		);
-		expect(r3).toEqual({ block: true, reason: expect.stringContaining("Access denied") });
+		expect(r3).toEqual({
+			block: true,
+			reason: expect.stringContaining("Access denied"),
+		});
 	});
 
 	it("deny reason mentions the ignored nudge message", async () => {
 		const ctx = makeCtx("/tmp");
-		await handleToolCall(toolEvent("read", "nm-1", { path: "/tmp/foo.ts" }), ctx, nudgeTimeoutConfig);
-		await handleToolCall(toolEvent("read", "nm-2", { path: "/tmp/foo.ts" }), ctx, nudgeTimeoutConfig);
+		await handleToolCall(
+			toolEvent("read", "nm-1", { path: "/tmp/foo.ts" }),
+			ctx,
+			nudgeTimeoutConfig,
+		);
+		await handleToolCall(
+			toolEvent("read", "nm-2", { path: "/tmp/foo.ts" }),
+			ctx,
+			nudgeTimeoutConfig,
+		);
 		const r3 = await handleToolCall(
 			toolEvent("read", "nm-3", { path: "/tmp/foo.ts" }),
 			ctx,
@@ -328,9 +394,21 @@ describe("nudgeTimeout escalation (nudge → deny)", () => {
 	it("resets the counter after escalation, allowing nudges again", async () => {
 		const ctx = makeCtx("/tmp");
 		// Trigger escalation (3 nudges).
-		await handleToolCall(toolEvent("read", "rs-1", { path: "/tmp/foo.ts" }), ctx, nudgeTimeoutConfig);
-		await handleToolCall(toolEvent("read", "rs-2", { path: "/tmp/foo.ts" }), ctx, nudgeTimeoutConfig);
-		await handleToolCall(toolEvent("read", "rs-3", { path: "/tmp/foo.ts" }), ctx, nudgeTimeoutConfig); // deny + reset
+		await handleToolCall(
+			toolEvent("read", "rs-1", { path: "/tmp/foo.ts" }),
+			ctx,
+			nudgeTimeoutConfig,
+		);
+		await handleToolCall(
+			toolEvent("read", "rs-2", { path: "/tmp/foo.ts" }),
+			ctx,
+			nudgeTimeoutConfig,
+		);
+		await handleToolCall(
+			toolEvent("read", "rs-3", { path: "/tmp/foo.ts" }),
+			ctx,
+			nudgeTimeoutConfig,
+		); // deny + reset
 
 		// After reset the 4th call should nudge again (not deny).
 		const r4 = await handleToolCall(
@@ -374,12 +452,27 @@ describe("nudgeTimeout escalation (nudge → deny)", () => {
 
 		const ctx = makeCtx("/tmp");
 		// Trigger 2 read nudges — hits threshold for "read".
-		await handleToolCall(toolEvent("read", "tr-1", { path: "/tmp/a" }), ctx, twoRuleConfig);
-		const r2 = await handleToolCall(toolEvent("read", "tr-2", { path: "/tmp/a" }), ctx, twoRuleConfig);
-		expect(r2).toEqual({ block: true, reason: expect.stringContaining("Access denied") });
+		await handleToolCall(
+			toolEvent("read", "tr-1", { path: "/tmp/a" }),
+			ctx,
+			twoRuleConfig,
+		);
+		const r2 = await handleToolCall(
+			toolEvent("read", "tr-2", { path: "/tmp/a" }),
+			ctx,
+			twoRuleConfig,
+		);
+		expect(r2).toEqual({
+			block: true,
+			reason: expect.stringContaining("Access denied"),
+		});
 
 		// grep counter is independent — first grep should still nudge.
-		const grepR = await handleToolCall(toolEvent("grep", "tr-g1"), ctx, twoRuleConfig);
+		const grepR = await handleToolCall(
+			toolEvent("grep", "tr-g1"),
+			ctx,
+			twoRuleConfig,
+		);
 		expect(grepR).toBeUndefined();
 	});
 
@@ -389,7 +482,12 @@ describe("nudgeTimeout escalation (nudge → deny)", () => {
 				cwd: {
 					defaultAction: "allow",
 					rules: [
-						{ action: "nudge", tool: "bash", pattern: "cat *", message: "use pluck_read over cat" },
+						{
+							action: "nudge",
+							tool: "bash",
+							pattern: "cat *",
+							message: "use pluck_read over cat",
+						},
 					],
 				},
 			},
@@ -401,8 +499,15 @@ describe("nudgeTimeout escalation (nudge → deny)", () => {
 
 		const ctx = makeCtx("/tmp");
 		await handleToolCall(bashEvent("cat /tmp/foo"), ctx, bashNudgeConfig);
-		const r2 = await handleToolCall(bashEvent("cat /tmp/bar"), ctx, bashNudgeConfig);
-		expect(r2).toEqual({ block: true, reason: expect.stringContaining("Access denied") });
+		const r2 = await handleToolCall(
+			bashEvent("cat /tmp/bar"),
+			ctx,
+			bashNudgeConfig,
+		);
+		expect(r2).toEqual({
+			block: true,
+			reason: expect.stringContaining("Access denied"),
+		});
 		expect(r2?.reason).toContain("use pluck_read over cat");
 	});
 });
