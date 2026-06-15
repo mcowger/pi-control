@@ -9,7 +9,9 @@
 		"format": "biome format --write ."
 	},
 	"pi": {
-		"extensions": ["./src/index.ts"]
+		"extensions": [
+			"./src/index.ts"
+		]
 	},
 	"dependencies": {
 		"strip-json-comments": "^5.0.3",
@@ -22,9 +24,9 @@
 		}
 	},
 	"devDependencies": {
-		"@earendil-works/pi-coding-agent": "^0.78.1",
+		"@earendil-works/pi-coding-agent": "^0.79.3",
 		"@types/bun": "latest",
-		"@biomejs/biome": "^1.9.4",
-		"typescript": "^5.9.3"
+		"@biomejs/biome": "^2.5.0",
+		"typescript": "^6.0.3"
 	}
 }
