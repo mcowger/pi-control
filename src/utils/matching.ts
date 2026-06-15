@@ -18,7 +18,7 @@ function matchTool(pattern: string, toolName: string): boolean {
  * `*` matches any sequence of characters (including spaces, slashes, dots).
  * `?` matches any single character.
  */
-function matchCommand(pattern: string, command: string): boolean {
+export function matchCommand(pattern: string, command: string): boolean {
 	const reSource = pattern
 		.split(/([*?])/)
 		.map((part, i, arr) => {

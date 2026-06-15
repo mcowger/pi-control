@@ -6,11 +6,17 @@ import type {
 import type { ControlsMode } from "../index.js";
 import type { ControlsResolvedConfig, Action } from "../config.js";
 import { resolvePolicy } from "../utils/location.js";
-import { matchRuleWithDetails, mostRestrictive } from "../utils/matching.js";
+import {
+	matchCommand,
+	matchRuleWithDetails,
+	mostRestrictive,
+} from "../utils/matching.js";
 import { normalizePath } from "../utils/path.js";
 import { parseCommand } from "../utils/bash-ast.js";
 import { logDecision } from "../utils/logger.js";
+import { minimatch } from "minimatch";
 import { DenyTracker } from "../utils/deny-tracker.js";
+import { suggestSessionPattern } from "../utils/bash-arity.js";
 
 /**
  * Nudge messages pending injection into tool results, keyed by toolCallId.
@@ -26,14 +32,17 @@ export const pendingNudges = new Map<string, string>();
  *
  * Key format:
  *   non-bash: `toolName:paths`
- *   bash with pattern: `bash:pattern:paths`
- *   bash without pattern: `bash:__default__:paths`
+ *   bash: `bash:pattern:paths` (pattern from arity-based suggestion)
  * where paths is sorted and pipe-joined.
  */
 export const sessionAllows = new Set<string>();
 
 /**
  * Build the canonical key for the session allowlist.
+ *
+ * For bash commands, the pattern is derived from the arity-based session
+ * suggestion (e.g. `git commit *` for `git commit -m "msg"`) so that
+ * similar subcommands match without re-prompting.
  */
 export function sessionAllowKey(
 	toolName: string,
@@ -43,13 +52,35 @@ export function sessionAllowKey(
 ): string {
 	const paths =
 		deniedPaths.length > 0 ? [...deniedPaths].sort().join("|") : "__cwd__";
-	if (toolName === "bash" && matchedPattern) {
-		return `bash:${matchedPattern}:${paths}`;
-	}
-	if (toolName === "bash") {
-		return `bash:__default__:${paths}`;
+	if (toolName === "bash" && command) {
+		const pattern = suggestSessionPattern(command);
+		return `bash:${pattern}:${paths}`;
 	}
 	return `${toolName}:${paths}`;
+}
+
+/**
+ * Check whether a bash command matches any session-allow pattern.
+ *
+ * Session-allow keys for bash store arity-based patterns (e.g. `git commit *`).
+ * We iterate the session-allow set and match the command against each
+ * bash-prefixed key's pattern component.
+ */
+export function sessionAllowsBashMatches(
+	command: string,
+	paths: string[],
+): boolean {
+	const sorted = paths.length > 0 ? [...paths].sort().join("|") : "__cwd__";
+	for (const key of sessionAllows) {
+		if (!key.startsWith("bash:")) continue;
+		// Key format: bash:<pattern>:<paths>
+		const lastColon = key.lastIndexOf(":");
+		const keyPaths = key.slice(lastColon + 1);
+		if (keyPaths !== sorted) continue;
+		const pattern = key.slice(5, lastColon); // strip "bash:" prefix
+		if (matchCommand(pattern, command)) return true;
+	}
+	return false;
 }
 
 /**
@@ -110,6 +141,122 @@ function buildContextSuffix(
 	return parts.length > 0 ? ` — ${parts.join(", ")}` : "";
 }
 
+/**
+ * Build a human-readable summary of a tool call for richer ask prompts.
+ * Returns undefined when no useful summary can be extracted.
+ */
+function buildToolSummary(event: ToolCallEvent): string | undefined {
+	const input = event.input as Record<string, unknown>;
+
+	switch (event.toolName) {
+		case "read": {
+			const path = typeof input.file_path === "string" ? input.file_path : "";
+			const offset =
+				typeof input.offset === "number" ? input.offset : undefined;
+			const limit = typeof input.limit === "number" ? input.limit : undefined;
+			const parts: string[] = [path || "unknown"];
+			if (offset !== undefined) parts.push(`from line ${offset}`);
+			if (limit !== undefined) parts.push(`${limit} lines`);
+			return `read ${parts.join(", ")}`;
+		}
+		case "write": {
+			const path = typeof input.file_path === "string" ? input.file_path : "";
+			const content = typeof input.content === "string" ? input.content : "";
+			const size = content.length > 0 ? ` (${content.length} chars)` : "";
+			return `write ${path || "unknown"}${size}`;
+		}
+		case "edit": {
+			const path = typeof input.filePath === "string" ? input.filePath : "";
+			// input may have `edits` (array) or `oldString`/`newString` (single)
+			const edits = Array.isArray(input.edits) ? input.edits : [];
+			const oldStr = typeof input.oldString === "string" ? input.oldString : "";
+			const count =
+				edits.length > 0
+					? `${edits.length} replacement${edits.length > 1 ? "s" : ""}`
+					: oldStr.length > 0
+						? "1 replacement"
+						: "";
+			return `edit ${path || "unknown"}${count ? ` (${count})` : ""}`;
+		}
+		case "grep": {
+			const pattern = typeof input.pattern === "string" ? input.pattern : "";
+			return `grep "${pattern}"`;
+		}
+		case "find": {
+			const pattern = typeof input.pattern === "string" ? input.pattern : "";
+			return `find "${pattern}"`;
+		}
+		case "ls": {
+			const path = typeof input.path === "string" ? input.path : "cwd";
+			return `ls ${path}`;
+		}
+		case "bash": {
+			const cmd =
+				typeof input.command === "string" ? input.command.slice(0, 120) : "";
+			return cmd || undefined;
+		}
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * Check cross-cutting path protection rules.
+ *
+ * Path protection patterns (e.g. `*.env`, `~/.ssh/*`) apply to ALL tools.
+ * If a file path matches a deny rule, the call is blocked regardless of
+ * location-based policies. Returns undefined (allow) or a deny block result.
+ */
+function checkPathProtection(
+	toolName: string,
+	event: ToolCallEvent,
+	cwd: string,
+	config: ControlsResolvedConfig,
+): ToolCallEventResult | undefined {
+	const patterns = config.pathProtection;
+	if (!patterns || Object.keys(patterns).length === 0) return undefined;
+
+	const input = event.input as Record<string, unknown>;
+	const pathsToCheck: string[] = [];
+
+	// Extract paths relevant to this tool.
+	if (toolName === "bash") {
+		// For bash, extract path-likely tokens from the command.
+		const cmd = typeof input.command === "string" ? input.command : "";
+		for (const token of cmd.split(/\s+/)) {
+			if (
+				token.startsWith("/") ||
+				token.startsWith("~") ||
+				token.startsWith(".")
+			) {
+				pathsToCheck.push(normalizePath(token, cwd));
+			}
+		}
+	} else {
+		pathsToCheck.push(...getTargetPaths(event, cwd));
+	}
+
+	// Check each path against all protection patterns.
+	for (const path of pathsToCheck) {
+		// Try directory-style prefix match and full glob match.
+		const basename = path.split("/").pop() ?? path;
+		for (const [pattern, action] of Object.entries(patterns)) {
+			// Match against basename (for patterns like "*.env") and full path.
+			const matches =
+				minimatch(basename, pattern, { dot: true }) ||
+				minimatch(path, pattern, { dot: true });
+			if (matches && action === "deny") {
+				return {
+					block: true,
+					reason: `[pi-controls] Access denied — path "${path}" matches protected pattern "${pattern}".`,
+				};
+			}
+		}
+	}
+
+	return undefined;
+}
+
 function notifyDecision(
 	ctx: ExtensionContext,
 	action: Action,
@@ -159,6 +306,7 @@ async function executeAction(
 	toolCallId?: string,
 	nudgeMessage?: string,
 	escalatedFromNudge?: string,
+	summary?: string,
 ): Promise<ToolCallEventResult | undefined> {
 	switch (action) {
 		case "allow":
@@ -176,18 +324,24 @@ async function executeAction(
 		}
 
 		case "ask": {
-			const key = sessionAllowKey(
-				toolName,
-				command,
-				deniedPaths,
-				matchedPattern,
-			);
-			// Already allowed for this session — skip the prompt.
+			// Check session-allow exact key first.
+			let key = sessionAllowKey(toolName, command, deniedPaths, matchedPattern);
 			if (sessionAllows.has(key)) return undefined;
 
+			// For bash, also check arity-based pattern matches.
+			if (
+				toolName === "bash" &&
+				command &&
+				sessionAllowsBashMatches(command, deniedPaths)
+			) {
+				return undefined;
+			}
+
+			// Build rich prompt title.
+			const summaryText = summary ? ` (${summary})` : "";
 			const context = buildContextSuffix(deniedPaths, matchedPattern);
 			const detail = context.length > 0 ? context : "";
-			const title = `[pi-controls] Allow ${toolName}?${detail}`;
+			const title = `[pi-controls] Allow ${toolName}${summaryText}?${detail}`;
 			const label = command ? command.slice(0, 120) : toolName;
 			const choice = await ctx.ui.select(title, [
 				"Allow",
@@ -201,6 +355,10 @@ async function executeAction(
 				};
 			}
 			if (choice === "Allow for session") {
+				// For bash without a specific matched pattern, use the arity-based key.
+				if (toolName === "bash" && command && !matchedPattern) {
+					key = sessionAllowKey(toolName, command, deniedPaths);
+				}
 				sessionAllows.add(key);
 			}
 			return undefined;
@@ -295,6 +453,15 @@ export async function handleToolCall(
 	mode: ControlsMode = "enforce",
 ): Promise<ToolCallEventResult | undefined> {
 	const cwd = ctx.cwd;
+
+	// ── Cross-cutting path protection ──────────────────────────────────────
+	const pathBlock = await checkPathProtection(
+		event.toolName,
+		event,
+		cwd,
+		config,
+	);
+	if (pathBlock) return pathBlock;
 
 	// ── Bash ─────────────────────────────────────────────────────────────────
 	if (event.toolName === "bash") {
@@ -412,6 +579,7 @@ export async function handleToolCall(
 			event.toolCallId,
 			nudgeMessage,
 			bashEscalatedFromNudge,
+			cmd.slice(0, 120) || "bash",
 		);
 	}
 
@@ -491,6 +659,7 @@ export async function handleToolCall(
 		finalAction === "nudge" && effectiveAction === "deny"
 			? nudgeMessage
 			: undefined;
+	const summary = buildToolSummary(event);
 	return executeAction(
 		effectiveAction,
 		event.toolName,
@@ -501,5 +670,6 @@ export async function handleToolCall(
 		event.toolCallId,
 		nudgeMessage,
 		escalatedFromNudge,
+		summary,
 	);
 }

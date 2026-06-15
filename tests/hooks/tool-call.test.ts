@@ -72,6 +72,7 @@ const config: ControlsResolvedConfig = {
 	defaultPolicy: "locked",
 	agentTimeout: null,
 	nudgeTimeout: null,
+	pathProtection: null,
 };
 
 describe("tool-call handler — path arg location resolution", () => {
@@ -156,6 +157,7 @@ describe("nudge action", () => {
 		defaultPolicy: null,
 		agentTimeout: null,
 		nudgeTimeout: null,
+		pathProtection: null,
 	};
 
 	it("allows the tool call (returns undefined) when action is nudge", async () => {
@@ -193,6 +195,7 @@ describe("agentTimeout escalation (deny → ask)", () => {
 		defaultPolicy: "locked",
 		agentTimeout: { maxDenies: 3, windowSeconds: 60 },
 		nudgeTimeout: null,
+		pathProtection: null,
 	};
 
 	// Config without agentTimeout — baseline to confirm deny stays deny.
@@ -328,6 +331,7 @@ describe("nudgeTimeout escalation (nudge → deny)", () => {
 	const noNudgeTimeoutConfig: ControlsResolvedConfig = {
 		...nudgeTimeoutConfig,
 		nudgeTimeout: null,
+		pathProtection: null,
 	};
 
 	beforeEach(() => {
@@ -530,21 +534,21 @@ describe("sessionAllowKey", () => {
 		expect(sessionAllowKey("grep", null, [])).toBe("grep:__cwd__");
 	});
 
-	it("builds key for bash with pattern", () => {
+	it("builds key for bash with pattern (arity-based, matchedPattern ignored)", () => {
 		expect(sessionAllowKey("bash", "rm -rf /tmp/x", ["/tmp"], "rm *")).toBe(
 			"bash:rm *:/tmp",
 		);
 	});
 
-	it("builds key for bash without pattern", () => {
+	it("builds key for bash using arity suggestion", () => {
 		expect(sessionAllowKey("bash", "git status", ["/home/user/project"])).toBe(
-			"bash:__default__:/home/user/project",
+			"bash:git status*:/home/user/project",
 		);
 	});
 
 	it("sorts paths in bash key", () => {
-		expect(sessionAllowKey("bash", "cp a b", ["/dst", "/src"], "cp *")).toBe(
-			"bash:cp *:/dst|/src",
+		expect(sessionAllowKey("bash", "cp a b", ["/dst", "/src"])).toBe(
+			"bash:cp a *:/dst|/src",
 		);
 	});
 });
@@ -561,6 +565,7 @@ describe("session allows", () => {
 		defaultPolicy: null,
 		agentTimeout: null,
 		nudgeTimeout: null,
+		pathProtection: null,
 		cycleKey: "ctrl+shift+m",
 	};
 
@@ -700,6 +705,7 @@ describe("session allows", () => {
 			defaultPolicy: null,
 			agentTimeout: null,
 			nudgeTimeout: null,
+			pathProtection: null,
 			cycleKey: "ctrl+shift+m",
 		};
 

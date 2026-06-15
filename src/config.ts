@@ -123,6 +123,15 @@ export interface ControlsConfig {
 	 * the same nudge rule too many times in a rolling window.
 	 */
 	nudgeTimeout?: NudgeTimeout | null;
+	/**
+	 * Cross-cutting path protection — patterns matched against file paths
+	 * BEFORE location-based policies. A "deny" here blocks the tool call
+	 * regardless of which tool is used (read, write, edit, bash, etc.).
+	 *
+	 * Patterns use minimatch globs (e.g. "*.env", "~/.ssh/*", "**&#47;secrets/**").
+	 * This is the correct place to protect sensitive files from ALL tools.
+	 */
+	pathProtection?: Record<string, Action> | null;
 }
 
 export interface ControlsResolvedConfig {
@@ -132,6 +141,7 @@ export interface ControlsResolvedConfig {
 	cycleKey: string;
 	agentTimeout: AgentTimeout | null;
 	nudgeTimeout: NudgeTimeout | null;
+	pathProtection: Record<string, Action> | null;
 }
 
 const DEFAULTS: ControlsResolvedConfig = {
@@ -141,6 +151,7 @@ const DEFAULTS: ControlsResolvedConfig = {
 	cycleKey: "ctrl+shift+m",
 	agentTimeout: null,
 	nudgeTimeout: null,
+	pathProtection: null,
 };
 
 // ─── File discovery ───────────────────────────────────────────────────────────
