@@ -53,12 +53,10 @@ export const SAFE_BASH_PATTERNS: string[] = [
 	"diff *",
 	"comm *",
 
-	// Data processing
+	// Structured data processing. Inline interpreters are intentionally excluded:
+	// their source can perform arbitrary filesystem or process effects.
 	"jq *",
 	"yq *",
-	"python3 -c *",
-	"python -c *",
-	"node -e *",
 
 	// Git read-only
 	"git status",
