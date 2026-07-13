@@ -82,8 +82,8 @@ export const SAFE_BASH_PATTERNS: string[] = [
 	// System info (read-only)
 	"echo *",
 	"printf *",
+	// `env` without arguments prints variables; with a command it executes it.
 	"env",
-	"env *",
 	"printenv *",
 	"printenv",
 	"which *",
