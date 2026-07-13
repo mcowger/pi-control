@@ -486,6 +486,17 @@ bun -e 'const p: string = "/outside/project/out.txt"; Bun.write(p, "data")'
 
 Analysis is deliberately conservative. Dynamic paths, unknown calls, unknown imports, subprocess execution, `eval`, parser errors, script files, unavailable standard-input source, and exceeded resource limits produce the configured `unknownAction`. The default is `ask`; if no approval is available, the call is blocked. Set it to `deny` for unattended environments.
 
+When you explicitly trust a narrow class of unanalyzed interpreter invocations, add `"allowUnanalyzed": true` to its matching `allow` Bash rule. This bypasses only the interpreter-analysis fallback for that rule; normal rule matching and cross-cutting path protection still apply. For example, to trust package scripts while keeping direct Bun script files subject to analysis:
+
+```json
+{
+  "action": "allow",
+  "tool": "bash",
+  "pattern": "bun run*",
+  "allowUnanalyzed": true
+}
+```
+
 Simple source whose calls and effects are fully understood remains silent under an allowing policy, for example `python3 -c 'print(1)'` or `node -e 'console.log("ok")'`.
 
 This is static policy analysis, not an execution sandbox. Code can be arbitrarily dynamic, so unsupported or ambiguous constructs are never treated as proof of safety.
@@ -997,6 +1008,7 @@ Pair this with a strict `defaultAction: "deny"` policy to maximize the benefit: 
 | `tool` | `string` | Yes | Tool name or glob. Wildcards: `*` (any chars), `?` (one char). |
 | `pattern` | `string` | bash only | Glob matched against the full command string. Only used when `tool` is `"bash"`. |
 | `message` | `string` | nudge only | Reminder text prepended to the tool result (so the LLM sees it first) and shown in the pi UI. Required when `action` is `"nudge"`. |
+| `allowUnanalyzed` | `boolean` | No | For an `allow` Bash rule, bypasses the interpreter-analysis fallback when its source cannot be analyzed. Use only for a narrowly trusted command pattern, such as `"bun run*"`. |
 
 ### Glob syntax
 

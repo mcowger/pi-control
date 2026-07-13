@@ -26,6 +26,12 @@ export interface Rule {
 	pattern?: string; // bash only
 	/** Required when action is "nudge": the reminder message injected into the tool result. */
 	message?: string;
+	/**
+	 * Permit a matching `allow` Bash rule to bypass the fallback action for
+	 * interpreter source that cannot be statically analyzed. Use only for a
+	 * command pattern whose source execution you explicitly trust.
+	 */
+	allowUnanalyzed?: boolean;
 }
 
 export interface Policy {

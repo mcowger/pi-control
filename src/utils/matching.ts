@@ -58,6 +58,8 @@ export interface MatchResult {
 	matchedPattern?: string;
 	/** For nudge rules, the reminder message to inject into the tool result. */
 	nudgeMessage?: string;
+	/** Whether the winning allow rule explicitly trusts unanalyzed interpreter source. */
+	allowUnanalyzed?: boolean;
 }
 
 // ─── Rule matching ────────────────────────────────────────────────────────────
@@ -87,6 +89,7 @@ export function matchRuleWithDetails(
 	let bestAction: Action | null = null;
 	let bestPattern: string | undefined;
 	let bestNudgeMessage: string | undefined;
+	let bestAllowsUnanalyzed = false;
 	for (const rule of policy.rules) {
 		// Tool glob must match.
 		if (!matchTool(rule.tool, toolName)) continue;
@@ -111,6 +114,8 @@ export function matchRuleWithDetails(
 			bestAction = rule.action;
 			bestPattern = patternMatched ? rule.pattern : undefined;
 			bestNudgeMessage = rule.action === "nudge" ? rule.message : undefined;
+			bestAllowsUnanalyzed =
+				rule.action === "allow" && rule.allowUnanalyzed === true;
 		}
 	}
 
@@ -118,6 +123,7 @@ export function matchRuleWithDetails(
 		action: bestAction ?? policy.defaultAction,
 		matchedPattern: bestPattern,
 		nudgeMessage: bestNudgeMessage,
+		allowUnanalyzed: bestAllowsUnanalyzed || undefined,
 	};
 }
 

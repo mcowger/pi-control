@@ -156,7 +156,10 @@
 	// evaluation flags, heredocs, and here-strings. Literal filesystem paths are
 	// evaluated through the normal location policies. Dynamic paths, unknown
 	// calls/imports, subprocesses, parser errors, and other unresolved effects
-	// use unknownAction. Set this object to null to disable the feature.
+	// use unknownAction. Set this object to null to disable the feature. To trust
+	// a narrow, unanalyzed command class, add allowUnanalyzed: true to a matching
+	// allow Bash rule (for example, { action: "allow", tool: "bash", pattern:
+	// "bun run*", allowUnanalyzed: true }).
 	"interpreterAnalysis": {
 		"enabled": true,
 		"unknownAction": "ask", // use "deny" for unattended environments

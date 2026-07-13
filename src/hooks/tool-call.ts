@@ -147,6 +147,40 @@ function buildContextSuffix(
 }
 
 /**
+ * Build an ask prompt for an interpreter-analysis fallback.
+ *
+ * The paths are policy-evaluation targets, not necessarily prohibited paths.
+ * Keeping them separate from the analysis reason avoids implying that a
+ * location policy blocked an otherwise allowed command.
+ */
+function buildAnalysisAskTitle(
+	toolName: string,
+	command: string | null,
+	targets: string[],
+	decisionReason: string,
+): string {
+	const commandSection = command
+		? `\n\nCommand:\n${command.slice(0, 240)}`
+		: "";
+	const reasonList = decisionReason
+		.split("; ")
+		.map((reason) => `• ${reason}`)
+		.join("\n");
+	const targetSection =
+		targets.length > 0
+			? `\n\nPolicy-evaluated target${targets.length === 1 ? "" : "s"}:\n${targets.map((target) => `• ${target}`).join("\n")}`
+			: "";
+	return (
+		`[pi-controls] Allow ${toolName}?` +
+		commandSection +
+		"\n\nReason for confirmation:\n" +
+		"Static analysis could not prove the interpreter source safe:\n" +
+		reasonList +
+		targetSection
+	);
+}
+
+/**
  * Build a human-readable summary of a tool call for richer ask prompts.
  * Returns undefined when no useful summary can be extracted.
  */
@@ -344,11 +378,14 @@ async function executeAction(
 				return undefined;
 			}
 
-			// Build rich prompt title.
+			// Interpreter-analysis fallbacks need a structured explanation. In
+			// particular, their targets are evaluated paths, not blocked paths.
 			const summaryText = summary ? ` (${summary})` : "";
 			const context = buildContextSuffix(deniedPaths, matchedPattern);
 			const detail = context.length > 0 ? context : "";
-			const title = `[pi-controls] Allow ${toolName}${summaryText}?${detail}`;
+			const title = decisionReason
+				? buildAnalysisAskTitle(toolName, command, deniedPaths, decisionReason)
+				: `[pi-controls] Allow ${toolName}${summaryText}?${detail}`;
 			const label = command ? command.slice(0, 120) : toolName;
 			const choice = await ctx.ui.select(title, [
 				"Allow",
@@ -488,6 +525,7 @@ export async function handleToolCall(
 			matchedPattern?: string;
 			nudgeMessage?: string;
 			ruleKey?: string;
+			allowUnanalyzed?: boolean;
 		}[] = [];
 		const targets: string[] = [];
 		const discoveredPaths: string[] = [];
@@ -496,6 +534,7 @@ export async function handleToolCall(
 
 		for (const stage of stages) {
 			let analyzedPaths: string[] = [];
+			const stageAnalysisReasons: string[] = [];
 			if (interpreterConfig.enabled) {
 				try {
 					const analysis = await analyzeCommandStageSource(stage, {
@@ -507,12 +546,12 @@ export async function handleToolCall(
 					analyzedPaths = analysis.findings
 						.flatMap((finding) => (finding.path === null ? [] : [finding.path]))
 						.map((path) => normalizePath(path, cwd));
-					analysisReasons.push(
+					stageAnalysisReasons.push(
 						...analysis.unresolvedEffects,
 						...analysis.parseErrors,
 					);
 				} catch (error) {
-					analysisReasons.push(`Interpreter analysis failed: ${error}`);
+					stageAnalysisReasons.push(`Interpreter analysis failed: ${error}`);
 				}
 			}
 
@@ -523,6 +562,7 @@ export async function handleToolCall(
 			discoveredPaths.push(...stageTargets);
 			if (stageTargets.length === 0) stageTargets.push(cwd);
 
+			const stageMatchResults: (typeof matchResults)[number][] = [];
 			for (const target of stageTargets) {
 				targets.push(target);
 				const resolved = resolvePolicy(target, cwd, config);
@@ -533,13 +573,24 @@ export async function handleToolCall(
 						"bash",
 						stage.command,
 					);
-					matchResults.push({
+					const matchResult = {
 						action: result.action,
 						matchedPattern: result.matchedPattern,
 						nudgeMessage: result.nudgeMessage,
 						ruleKey: nudgeKey("bash", result.matchedPattern),
-					});
+						allowUnanalyzed: result.allowUnanalyzed,
+					};
+					matchResults.push(matchResult);
+					stageMatchResults.push(matchResult);
 				}
+			}
+
+			const sourceIsExplicitlyTrusted =
+				stageAnalysisReasons.length > 0 &&
+				stageMatchResults.length > 0 &&
+				stageMatchResults.every((result) => result.allowUnanalyzed);
+			if (!sourceIsExplicitlyTrusted) {
+				analysisReasons.push(...stageAnalysisReasons);
 			}
 		}
 

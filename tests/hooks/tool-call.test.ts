@@ -188,9 +188,73 @@ describe("tool-call handler — interpreter source analysis", () => {
 		expect((ctx.ui.select as ReturnType<typeof mock>).mock.calls.length).toBe(
 			1,
 		);
-		expect(
-			(ctx.ui.select as ReturnType<typeof mock>).mock.calls[0]?.[0],
-		).toContain("script files are not yet analyzed");
+		const title = (ctx.ui.select as ReturnType<typeof mock>).mock.calls[0]?.[0];
+		expect(title).toContain("[pi-controls] Allow bash?\n\nCommand:\n");
+		expect(title).toContain(
+			"Reason for confirmation:\nStatic analysis could not prove the interpreter source safe:\n• python3 script files are not yet analyzed",
+		);
+		expect(title).toContain("Policy-evaluated target:\n• /tmp/unknown.py");
+		expect(title).not.toContain("blocked path");
+	});
+
+	it("allows an explicitly trusted unanalyzed Bun package script", async () => {
+		const trustedConfig: ControlsResolvedConfig = {
+			...config,
+			policies: {
+				...config.policies,
+				open: {
+					defaultAction: "allow",
+					rules: [
+						{
+							action: "allow",
+							tool: "bash",
+							pattern: "bun run*",
+							allowUnanalyzed: true,
+						},
+					],
+				},
+			},
+		};
+		const ctx = makeCtx("/tmp");
+		const result = await handleToolCall(
+			bashEvent("bun run build"),
+			ctx,
+			trustedConfig,
+		);
+		expect(result).toBeUndefined();
+		expect((ctx.ui.select as ReturnType<typeof mock>).mock.calls.length).toBe(
+			0,
+		);
+	});
+
+	it("still asks for a direct Bun script file without the explicit trust rule", async () => {
+		const trustedConfig: ControlsResolvedConfig = {
+			...config,
+			policies: {
+				...config.policies,
+				open: {
+					defaultAction: "allow",
+					rules: [
+						{
+							action: "allow",
+							tool: "bash",
+							pattern: "bun run*",
+							allowUnanalyzed: true,
+						},
+					],
+				},
+			},
+		};
+		const ctx = makeCtx("/tmp");
+		const result = await handleToolCall(
+			bashEvent("bun ./script.ts"),
+			ctx,
+			trustedConfig,
+		);
+		expect(result).toBeUndefined(); // test UI chooses Allow
+		expect((ctx.ui.select as ReturnType<typeof mock>).mock.calls.length).toBe(
+			1,
+		);
 	});
 
 	it("denies a Bun TypeScript write to a locked literal path", async () => {
