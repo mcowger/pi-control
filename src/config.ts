@@ -32,6 +32,11 @@ export interface Rule {
 	 * command pattern whose source execution you explicitly trust.
 	 */
 	allowUnanalyzed?: boolean;
+	/**
+	 * Optional policy name for an approval saved from an interactive prompt.
+	 * Omitted rules apply to every policy; interactive approvals always set it.
+	 */
+	policy?: string;
 }
 
 export interface Policy {
@@ -122,6 +127,12 @@ export interface ControlsConfig {
 	policies?: Record<string, Policy>;
 	locations?: Record<string, string>;
 	/**
+	 * Allow rules saved interactively from a pi-controls confirmation prompt.
+	 * Global and project-local lists are combined at load time; these rules take
+	 * precedence over location-policy rules, but never pathProtection.
+	 */
+	approvalRules?: Rule[];
+	/**
 	 * Fallback policy name when no location matches.
 	 * null / absent = fail-open (all tool calls proceed unrestricted).
 	 */
@@ -158,6 +169,8 @@ export interface ControlsConfig {
 export interface ControlsResolvedConfig {
 	policies: Record<string, Policy>;
 	locations: Record<string, string>;
+	/** Persisted allow rules from global and project-local configuration. */
+	approvalRules?: Rule[];
 	defaultPolicy: string | null;
 	cycleKey: string;
 	agentTimeout: AgentTimeout | null;
@@ -200,6 +213,7 @@ function resolveInterpreterAnalysis(
 const DEFAULTS: ControlsResolvedConfig = {
 	policies: {},
 	locations: {},
+	approvalRules: [],
 	defaultPolicy: null,
 	cycleKey: "ctrl+shift+m",
 	agentTimeout: null,
@@ -212,7 +226,7 @@ const DEFAULTS: ControlsResolvedConfig = {
 
 const FILENAMES = ["pi-controls.jsonc", "pi-controls.json"];
 
-function findGlobalPath(): string {
+export function findGlobalConfigPath(): string {
 	const base = resolve(getAgentDir(), "extensions");
 	for (const name of FILENAMES) {
 		const p = resolve(base, name);
@@ -222,8 +236,8 @@ function findGlobalPath(): string {
 	return resolve(base, "pi-controls.jsonc");
 }
 
-function findLocalPath(): string | null {
-	let dir = process.cwd();
+export function findProjectConfigPath(startDir = process.cwd()): string {
+	let dir = startDir;
 	const home = homedir();
 	while (true) {
 		if (dir === home) break;
@@ -242,7 +256,150 @@ function findLocalPath(): string | null {
 		if (parent === dir) break;
 		dir = parent;
 	}
-	return null;
+	// No project config exists yet. Use the current directory as the project
+	// root so an interactive approval can create one predictably.
+	return resolve(startDir, ".pi/extensions/pi-controls.jsonc");
+}
+
+/** Read a JSONC file without exposing parsing failures as an empty config. */
+async function readConfigFile(path: string): Promise<{
+	raw: string;
+	config: ControlsConfig;
+} | null> {
+	try {
+		const raw = await readFile(path, "utf-8");
+		return {
+			raw,
+			config: JSON.parse(stripJsonComments(raw)) as ControlsConfig,
+		};
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "ENOENT") return null;
+		throw new Error(`Unable to read pi-controls config ${path}: ${error}`);
+	}
+}
+
+function formatApprovalRules(rules: Rule[], propertyIndent: string): string {
+	return JSON.stringify(rules, null, "\t")
+		.split("\n")
+		.map((line, index) => (index === 0 ? line : `${propertyIndent}${line}`))
+		.join("\n");
+}
+
+/** Find the closing bracket for an array, ignoring strings and comments. */
+function findArrayEnd(source: string, start: number): number {
+	let depth = 0;
+	let quote: '"' | "'" | null = null;
+	let lineComment = false;
+	let blockComment = false;
+	for (let index = start; index < source.length; index++) {
+		const char = source[index];
+		const next = source[index + 1];
+		if (lineComment) {
+			if (char === "\n") lineComment = false;
+			continue;
+		}
+		if (blockComment) {
+			if (char === "*" && next === "/") {
+				blockComment = false;
+				index++;
+			}
+			continue;
+		}
+		if (quote) {
+			if (char === "\\") {
+				index++;
+			} else if (char === quote) {
+				quote = null;
+			}
+			continue;
+		}
+		if (char === "/" && next === "/") {
+			lineComment = true;
+			index++;
+			continue;
+		}
+		if (char === "/" && next === "*") {
+			blockComment = true;
+			index++;
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			quote = char;
+			continue;
+		}
+		if (char === "[") depth++;
+		if (char === "]") {
+			depth--;
+			if (depth === 0) return index;
+		}
+	}
+	throw new Error(
+		"Could not find the end of approvalRules in pi-controls config",
+	);
+}
+
+function updateApprovalRules(raw: string, rules: Rule[]): string {
+	const property = /^(\s*)"approvalRules"\s*:\s*\[/m.exec(raw);
+	if (property?.index !== undefined) {
+		const indent = property[1];
+		const valueStart = raw.indexOf(
+			"[",
+			property.index + property[0].length - 1,
+		);
+		const valueEnd = findArrayEnd(raw, valueStart);
+		return (
+			raw.slice(0, valueStart) +
+			formatApprovalRules(rules, indent) +
+			raw.slice(valueEnd + 1)
+		);
+	}
+
+	if (raw.trim().length === 0) {
+		return `{\n\t"approvalRules": ${formatApprovalRules(rules, "\t")}\n}\n`;
+	}
+	const close = raw.lastIndexOf("}");
+	if (close === -1) {
+		throw new Error("pi-controls config is not a JSONC object");
+	}
+	const before = raw.slice(0, close).trimEnd();
+	const needsComma = before.trim() !== "{";
+	return `${before}${needsComma ? "," : ""}\n\t"approvalRules": ${formatApprovalRules(rules, "\t")}\n}${raw.slice(close + 1)}`;
+}
+
+/**
+ * Add an interactive allow rule without rewriting unrelated JSONC comments.
+ * Returns the config path and whether an identical rule already existed.
+ */
+export async function addApprovalRule(
+	scope: "project" | "global",
+	cwd: string,
+	rule: Rule,
+): Promise<{ path: string; added: boolean }> {
+	const path =
+		scope === "global" ? findGlobalConfigPath() : findProjectConfigPath(cwd);
+	const existing = await readConfigFile(path);
+	const config = existing?.config ?? {};
+	const rules = config.approvalRules ?? [];
+	if (
+		rules.some(
+			(existingRule) =>
+				existingRule.action === rule.action &&
+				existingRule.tool === rule.tool &&
+				existingRule.pattern === rule.pattern &&
+				existingRule.policy === rule.policy,
+		)
+	) {
+		return { path, added: false };
+	}
+	const nextRules = [...rules, rule];
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(
+		path,
+		updateApprovalRules(existing?.raw ?? "", nextRules),
+		"utf-8",
+	);
+	return { path, added: true };
 }
 
 // ─── Deep merge ───────────────────────────────────────────────────────────────
@@ -286,18 +443,21 @@ export class ControlsConfigLoader {
 			unknown
 		>;
 
-		const globalCfg = await readJsonc(findGlobalPath());
+		const globalCfg = await readJsonc(findGlobalConfigPath());
 		if (globalCfg) deepMerge(merged, globalCfg as Record<string, unknown>);
 
-		const localPath = findLocalPath();
-		if (localPath) {
-			const localCfg = await readJsonc(localPath);
-			if (localCfg) deepMerge(merged, localCfg as Record<string, unknown>);
-		}
+		const localCfg = await readJsonc(findProjectConfigPath());
+		if (localCfg) deepMerge(merged, localCfg as Record<string, unknown>);
 
 		const raw = merged as unknown as ControlsResolvedConfig;
 		this.resolved = {
 			...raw,
+			// approvalRules are additive: project approvals must not hide globally
+			// approved commands when the project config is loaded.
+			approvalRules: [
+				...(globalCfg?.approvalRules ?? []),
+				...(localCfg?.approvalRules ?? []),
+			],
 			policies: expandPolicies(raw.policies),
 			interpreterAnalysis: resolveInterpreterAnalysis(raw.interpreterAnalysis),
 		};

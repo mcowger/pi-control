@@ -836,7 +836,7 @@ describe("session allows", () => {
 		sessionAllows.clear();
 	});
 
-	it("select is called with Allow, Allow for session, and Deny", async () => {
+	it("select offers session, project, and global allow choices", async () => {
 		const ctx = makeCtx("/tmp");
 		await handleToolCall(
 			toolEvent("write", "sel-1", { file_path: "/tmp/foo.ts" }),
@@ -846,7 +846,75 @@ describe("session allows", () => {
 		const selectMock = ctx.ui.select as ReturnType<typeof mock>;
 		expect(selectMock.mock.calls.length).toBe(1);
 		const args = selectMock.mock.calls[0];
-		expect(args[1]).toEqual(["Allow", "Allow for session", "Deny"]);
+		expect(args[1]).toEqual([
+			"Allow",
+			"Allow for session",
+			"Allow for Project",
+			"Allow Globally",
+			"Deny",
+		]);
+	});
+
+	it("offers persistent approvals for a multi-policy bash call", async () => {
+		const multiPolicyConfig: ControlsResolvedConfig = {
+			...askConfig,
+			policies: {
+				open: { defaultAction: "ask", rules: [] },
+				other: { defaultAction: "ask", rules: [] },
+			},
+			locations: { "/tmp": "open", "/home/user": "other" },
+			defaultPolicy: null,
+		};
+		const ctx = makeCtx("/tmp");
+		await handleToolCall(
+			bashEvent("cp /tmp/source /home/user/destination", "multi-policy"),
+			ctx,
+			multiPolicyConfig,
+		);
+		expect(
+			(ctx.ui.select as ReturnType<typeof mock>).mock.calls[0]?.[1],
+		).toEqual([
+			"Allow",
+			"Allow for session",
+			"Allow for Project",
+			"Allow Globally",
+			"Deny",
+		]);
+	});
+
+	it("honors a persisted approval before ordinary policy rules", async () => {
+		const approvalConfig: ControlsResolvedConfig = {
+			...askConfig,
+			approvalRules: [{ action: "allow", tool: "write" }],
+		};
+		const ctx = makeCtx("/tmp");
+		const result = await handleToolCall(
+			toolEvent("write", "persisted", { file_path: "/tmp/foo.ts" }),
+			ctx,
+			approvalConfig,
+		);
+		expect(result).toBeUndefined();
+		expect((ctx.ui.select as ReturnType<typeof mock>).mock.calls.length).toBe(
+			0,
+		);
+	});
+
+	it("does not apply a persisted approval to a different policy", async () => {
+		const approvalConfig: ControlsResolvedConfig = {
+			...askConfig,
+			approvalRules: [
+				{ action: "allow", tool: "write", policy: "other-policy" },
+			],
+		};
+		const ctx = makeCtx("/tmp");
+		await handleToolCall(
+			toolEvent("write", "different-policy", { file_path: "/tmp/foo.ts" }),
+			ctx,
+			approvalConfig,
+		);
+		expect((ctx.ui.select as ReturnType<typeof mock>).mock.calls.length).toBe(
+			1,
+		);
 	});
 
 	it("allows the call when user picks Allow", async () => {

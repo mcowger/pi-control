@@ -964,6 +964,7 @@ Pair this with a strict `defaultAction: "deny"` policy to maximize the benefit: 
 |-------|------|----------|-------------|
 | `policies` | `Record<string, Policy>` | No | Named policies available for use in `locations`. |
 | `locations` | `Record<string, string>` | No | Maps filesystem paths to policy names. |
+| `approvalRules` | `Rule[]` | No | Allow rules saved by **Allow for Project** or **Allow Globally**. Global and project-local lists are combined. These rules override ordinary location-policy rules but never `pathProtection`. |
 | `defaultPolicy` | `string \| null` | No | Policy to apply when no location matches. `null` or absent = fail-open. |
 | `agentTimeout` | `AgentTimeout \| null` | No | Circuit breaker: escalate `deny` → `ask` when the deny rate exceeds the threshold. `null` or absent = disabled. |
 | `nudgeTimeout` | `NudgeTimeout \| null` | No | Circuit breaker: escalate `nudge` → `deny` when the same nudge rule is ignored too many times. `null` or absent = disabled. |
@@ -1009,6 +1010,16 @@ Pair this with a strict `defaultAction: "deny"` policy to maximize the benefit: 
 | `pattern` | `string` | bash only | Glob matched against the full command string. Only used when `tool` is `"bash"`. |
 | `message` | `string` | nudge only | Reminder text prepended to the tool result (so the LLM sees it first) and shown in the pi UI. Required when `action` is `"nudge"`. |
 | `allowUnanalyzed` | `boolean` | No | For an `allow` Bash rule, bypasses the interpreter-analysis fallback when its source cannot be analyzed. Use only for a narrowly trusted command pattern, such as `"bun run*"`. |
+| `policy` | `string` | approval rules only | Limits an interactive approval to one named policy. Omit it only for a deliberately policy-agnostic manual approval. |
+
+### Persisting an approval
+
+An `ask` prompt can offer **Allow for Project** and **Allow Globally** in addition to the one-time and session choices. Both save a generated `allow` rule to `approvalRules`:
+
+- **Allow for Project** writes `.pi/extensions/pi-controls.jsonc`, creating it under the current working directory when no project config exists.
+- **Allow Globally** writes `<agentDir>/extensions/pi-controls.jsonc`.
+
+A saved rule is immediately active for the current session and is loaded on later sessions. When a call resolves to more than one policy, choosing either persistent option opens a follow-up selector; choose the one policy that should receive the saved rule.
 
 ### Glob syntax
 

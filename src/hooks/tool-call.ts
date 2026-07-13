@@ -5,9 +5,11 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { ControlsMode } from "../index.js";
 import {
+	addApprovalRule,
 	DEFAULT_INTERPRETER_ANALYSIS,
 	type ControlsResolvedConfig,
 	type Action,
+	type Rule,
 } from "../config.js";
 import { resolvePolicy } from "../utils/location.js";
 import {
@@ -153,6 +155,30 @@ function buildContextSuffix(
  * Keeping them separate from the analysis reason avoids implying that a
  * location policy blocked an otherwise allowed command.
  */
+interface ApprovalPersistence {
+	rule: Rule;
+	config: ControlsResolvedConfig;
+	policyNames: string[];
+}
+
+function matchingApprovalRule(
+	config: ControlsResolvedConfig,
+	policyName: string,
+	toolName: string,
+	command: string | null,
+) {
+	const rules = config.approvalRules?.filter(
+		(rule) => rule.policy === undefined || rule.policy === policyName,
+	);
+	if (!rules || rules.length === 0) return undefined;
+	const result = matchRuleWithDetails(
+		{ defaultAction: "deny", rules },
+		toolName,
+		command,
+	);
+	return result.action === "allow" ? result : undefined;
+}
+
 function buildAnalysisAskTitle(
 	toolName: string,
 	command: string | null,
@@ -348,6 +374,7 @@ async function executeAction(
 	escalatedFromNudge?: string,
 	summary?: string,
 	decisionReason?: string,
+	approvalPersistence?: ApprovalPersistence,
 ): Promise<ToolCallEventResult | undefined> {
 	switch (action) {
 		case "allow":
@@ -386,12 +413,12 @@ async function executeAction(
 			const title = decisionReason
 				? buildAnalysisAskTitle(toolName, command, deniedPaths, decisionReason)
 				: `[pi-controls] Allow ${toolName}${summaryText}?${detail}`;
-			const label = command ? command.slice(0, 120) : toolName;
-			const choice = await ctx.ui.select(title, [
-				"Allow",
-				"Allow for session",
-				"Deny",
-			]);
+			const choices = ["Allow", "Allow for session"];
+			if (approvalPersistence) {
+				choices.push("Allow for Project", "Allow Globally");
+			}
+			choices.push("Deny");
+			const choice = await ctx.ui.select(title, choices);
 			if (!choice || choice === "Deny") {
 				return {
 					block: true,
@@ -404,6 +431,45 @@ async function executeAction(
 					key = sessionAllowKey(toolName, command, deniedPaths);
 				}
 				sessionAllows.add(key);
+			}
+			if (
+				approvalPersistence &&
+				(choice === "Allow for Project" || choice === "Allow Globally")
+			) {
+				try {
+					const scope = choice === "Allow for Project" ? "project" : "global";
+					let policyName = approvalPersistence.policyNames[0];
+					if (approvalPersistence.policyNames.length > 1) {
+						const selected = await ctx.ui.select(
+							"[pi-controls] Choose policy for the saved allow rule",
+							approvalPersistence.policyNames,
+						);
+						if (!selected) {
+							return {
+								block: true,
+								reason: `[pi-controls] Blocked by user: no policy selected for saved ${scope} allow rule`,
+							};
+						}
+						policyName = selected;
+					}
+					const rule = { ...approvalPersistence.rule, policy: policyName };
+					const saved = await addApprovalRule(scope, ctx.cwd, rule);
+					if (saved.added) {
+						approvalPersistence.config.approvalRules = [
+							...(approvalPersistence.config.approvalRules ?? []),
+							rule,
+						];
+					}
+					ctx.ui.notify(
+						`[pi-controls] ${saved.added ? "Saved" : "Existing"} allow rule for ${policyName} in ${scope} config: ${saved.path}`,
+						"info",
+					);
+				} catch (error) {
+					return {
+						block: true,
+						reason: `[pi-controls] Could not save allow rule: ${error}`,
+					};
+				}
 			}
 			return undefined;
 		}
@@ -530,6 +596,7 @@ export async function handleToolCall(
 		const targets: string[] = [];
 		const discoveredPaths: string[] = [];
 		const analysisReasons: string[] = [];
+		const policyNames = new Set<string>();
 		let policyName: string | null = null;
 
 		for (const stage of stages) {
@@ -568,11 +635,14 @@ export async function handleToolCall(
 				const resolved = resolvePolicy(target, cwd, config);
 				if (resolved) {
 					policyName = resolved.name;
-					const result = matchRuleWithDetails(
-						resolved.policy,
-						"bash",
-						stage.command,
-					);
+					policyNames.add(resolved.name);
+					const result =
+						matchingApprovalRule(
+							config,
+							resolved.name,
+							"bash",
+							stage.command,
+						) ?? matchRuleWithDetails(resolved.policy, "bash", stage.command);
 					const matchResult = {
 						action: result.action,
 						matchedPattern: result.matchedPattern,
@@ -673,6 +743,19 @@ export async function handleToolCall(
 		const summary = analysisReason
 			? `${cmd.slice(0, 80)}; unresolved source: ${analysisReason.slice(0, 160)}`
 			: cmd.slice(0, 120) || "bash";
+		const approvalPersistence =
+			stages.length === 1 && policyNames.size > 0
+				? {
+						rule: {
+							action: "allow" as const,
+							tool: "bash",
+							pattern: suggestSessionPattern(stages[0].command),
+							allowUnanalyzed: true,
+						},
+						config,
+						policyNames: [...policyNames].sort(),
+					}
+				: undefined;
 		return executeAction(
 			effectiveBashAction,
 			"bash",
@@ -687,6 +770,7 @@ export async function handleToolCall(
 			bashEscalatedFromNudge,
 			summary,
 			analysisReason || undefined,
+			approvalPersistence,
 		);
 	}
 
@@ -697,17 +781,17 @@ export async function handleToolCall(
 		nudgeMessage?: string;
 		ruleKey: string;
 	}[] = [];
+	const policyNames = new Set<string>();
 	let policyName: string | null = null;
 
 	for (const target of targets) {
 		const resolved = resolvePolicy(target, cwd, config);
 		if (resolved) {
 			policyName = resolved.name;
-			const result = matchRuleWithDetails(
-				resolved.policy,
-				event.toolName,
-				null,
-			);
+			policyNames.add(resolved.name);
+			const result =
+				matchingApprovalRule(config, resolved.name, event.toolName, null) ??
+				matchRuleWithDetails(resolved.policy, event.toolName, null);
 			matchResults.push({
 				action: result.action,
 				nudgeMessage: result.nudgeMessage,
@@ -767,6 +851,14 @@ export async function handleToolCall(
 			? nudgeMessage
 			: undefined;
 	const summary = buildToolSummary(event);
+	const approvalPersistence =
+		policyNames.size > 0
+			? {
+					rule: { action: "allow" as const, tool: event.toolName },
+					config,
+					policyNames: [...policyNames].sort(),
+				}
+			: undefined;
 	return executeAction(
 		effectiveAction,
 		event.toolName,
@@ -778,5 +870,7 @@ export async function handleToolCall(
 		nudgeMessage,
 		escalatedFromNudge,
 		summary,
+		undefined,
+		approvalPersistence,
 	);
 }

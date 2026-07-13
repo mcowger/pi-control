@@ -125,6 +125,21 @@
 		}
 	},
 
+	// ── Persisted approvals ────────────────────────────────────────────────────
+	// Rules saved from an "Allow for Project" or "Allow Globally" prompt are
+	// stored here. Project-local and global lists are combined. The policy field
+	// limits the approval to one named policy; omit it only for a deliberately
+	// policy-agnostic manual approval.
+	"approvalRules": [
+		{
+			"action": "allow",
+			"tool": "bash",
+			"pattern": "bun run build*",
+			"allowUnanalyzed": true,
+			"policy": "cwd"
+		}
+	],
+
 	// ── Locations ─────────────────────────────────────────────────────────────
 	// Maps filesystem paths to policies. Most specific (longest) path wins.
 	"locations": {
