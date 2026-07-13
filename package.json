@@ -1,6 +1,6 @@
 {
 	"name": "@mcowger/pi-control",
-	"version": "0.3.1",
+	"version": "0.3.2",
 	"description": "Action-based filesystem policies for pi tool calls.",
 	"repository": {
 		"type": "git",
