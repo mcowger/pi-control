@@ -1,8 +1,24 @@
 {
-	"name": "pi-controls",
-	"private": true,
-	"version": "0.3.0",
+	"name": "@mcowger/pi-control",
+	"version": "0.3.1",
+	"description": "Action-based filesystem policies for pi tool calls.",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/mcowger/pi-control.git"
+	},
 	"type": "module",
+	"keywords": [
+		"pi-package"
+	],
+	"files": [
+		"src",
+		"skills",
+		"examples",
+		"README.md"
+	],
+	"publishConfig": {
+		"access": "public"
+	},
 	"scripts": {
 		"test": "bun test",
 		"check": "biome check .",
@@ -11,6 +27,9 @@
 	"pi": {
 		"extensions": [
 			"./src/index.ts"
+		],
+		"skills": [
+			"./skills"
 		]
 	},
 	"dependencies": {

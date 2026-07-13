@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "pi-controls",
+      "name": "@mcowger/pi-control",
       "dependencies": {
         "bash-parser": "^0.5.0",
         "minimatch": "^10.2.5",

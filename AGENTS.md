@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-A **pi extension** (not an npm package) that intercepts tool calls made by the pi coding agent and enforces action-based policies scoped by filesystem path. Installed via `pi install git:…`, not published to npm.
+A **pi extension and npm package** that intercepts tool calls made by the pi coding agent and enforces action-based policies scoped by filesystem path. Published automatically from `v*` tags and installed via `pi install npm:@mcowger/pi-control`.
 
 ## Runtime and toolchain
 

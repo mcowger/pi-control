@@ -43,46 +43,50 @@ When the agent tries to run a bash command, read a file, write to a path, or cal
 
 ## Installation
 
-pi-controls is installed via pi's built-in package manager using the `git:` source prefix. No npm publish required.
+pi-controls is published to npm and installed via pi's built-in package manager.
 
 ### Global install (all projects)
 
 ```sh
-pi install git:github.com/mcowger/pi-control
+pi install npm:@mcowger/pi-control
 ```
 
-This clones the repo, runs `bun install`, and records the package in `~/.pi/agent/settings.json`. The extension is active in every pi session.
+The extension is active in every pi session.
 
 ### Project-local install
 
 ```sh
-pi install git:github.com/mcowger/pi-control --local
+pi install npm:@mcowger/pi-control -l
 ```
 
-Same as above but records the package in `.pi/settings.json` in the current directory. Only active when pi runs from that project.
+This records the package in `.pi/settings.json` in the current directory. Only active when pi runs from that project.
 
 ### Pinning to a specific version
 
-Append `@<ref>` to pin to a branch, tag, or commit. Pinned packages are excluded from `pi update`.
+Append `@<version>` to pin a published version. Pinned packages are excluded from `pi update`.
 
 ```sh
-pi install git:github.com/mcowger/pi-control@v1.0.0
+pi install npm:@mcowger/pi-control@1.0.0
+```
+
+Git sources can also be pinned to a tag, branch, or commit when testing unreleased changes:
+
+```sh
 pi install git:github.com/mcowger/pi-control@main
-pi install git:github.com/mcowger/pi-control@abc1234
 ```
 
 ### Updating
 
 ```sh
-pi update                             # update all packages
-pi update git:github.com/mcowger/pi-control  # update this package only
+pi update                         # update all packages
+pi update npm:@mcowger/pi-control  # update this package only
 ```
 
 ### Removing
 
 ```sh
-pi remove git:github.com/mcowger/pi-control
-pi remove git:github.com/mcowger/pi-control --local  # project-local
+pi remove npm:@mcowger/pi-control
+pi remove npm:@mcowger/pi-control -l      # project-local
 ```
 
 ---
