@@ -85,4 +85,64 @@ describe("parseCommand", () => {
 		const stages = await parseCommand("ls /tmp > /tmp/out.txt");
 		expect(stages[0].redirectFiles).toContain("/tmp/out.txt");
 	});
+
+	it("extracts structured static arguments", async () => {
+		const stages = await parseCommand(
+			`node -e 'require("fs").writeFileSync("/tmp/x", "x")'`,
+		);
+		expect(stages[0].args).toEqual([
+			{ value: "node", static: true },
+			{ value: "-e", static: true },
+			{
+				value: `require("fs").writeFileSync("/tmp/x", "x")`,
+				static: true,
+			},
+		]);
+		expect(stages[0].analysisIncomplete).toBe(false);
+	});
+
+	it("marks expanded arguments as incomplete", async () => {
+		const stages = await parseCommand(`python3 -c "$SOURCE"`);
+		expect(stages[0].args[2].static).toBe(false);
+		expect(stages[0].analysisIncomplete).toBe(true);
+	});
+
+	it("extracts a quoted heredoc body as embedded source", async () => {
+		const stages = await parseCommand(
+			"python3 - <<'PY'\nopen('/outside/x', 'w')\nPY",
+		);
+		expect(stages).toHaveLength(1);
+		expect(stages[0].command).toBe("python3 -");
+		expect(stages[0].embeddedSources).toEqual([
+			{
+				kind: "heredoc",
+				text: "open('/outside/x', 'w')\n",
+				static: true,
+			},
+		]);
+		expect(stages[0].analysisIncomplete).toBe(false);
+	});
+
+	it("extracts a here-string as embedded source", async () => {
+		const stages = await parseCommand(
+			`python3 - <<< 'open("/outside/x", "w")'`,
+		);
+		expect(stages[0].embeddedSources).toEqual([
+			{
+				kind: "herestring",
+				text: `open("/outside/x", "w")`,
+				static: true,
+			},
+		]);
+	});
+
+	it("marks indirect heredoc pipelines as incomplete", async () => {
+		const stages = await parseCommand(
+			"cat <<EOF | python3 -\nopen('/outside/x', 'w')\nEOF",
+		);
+		expect(stages[0].embeddedSources[0]?.text).toBe(
+			"open('/outside/x', 'w')\n",
+		);
+		expect(stages[0].analysisIncomplete).toBe(true);
+	});
 });

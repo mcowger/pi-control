@@ -70,6 +70,7 @@ const config: ControlsResolvedConfig = {
 		"/tmp": "open",
 	},
 	defaultPolicy: "locked",
+	cycleKey: "ctrl+shift+m",
 	agentTimeout: null,
 	nudgeTimeout: null,
 	pathProtection: null,
@@ -139,6 +140,196 @@ describe("tool-call handler — path arg location resolution", () => {
 	});
 });
 
+describe("tool-call handler — interpreter source analysis", () => {
+	it("denies a Python heredoc write to a locked literal path", async () => {
+		const result = await handleToolCall(
+			bashEvent(
+				"python3 - <<'PY'\nfrom pathlib import Path\nPath('/home/user/out.txt').write_text('x')\nPY",
+			),
+			makeCtx("/tmp"),
+			config,
+		);
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("/home/user/out.txt");
+	});
+
+	it("denies a Node inline write to a locked literal path", async () => {
+		const result = await handleToolCall(
+			bashEvent(
+				`node -e 'require("fs").writeFileSync("/home/user/out.txt", "x")'`,
+			),
+			makeCtx("/tmp"),
+			config,
+		);
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("/home/user/out.txt");
+	});
+
+	it("denies a Path.open write to a locked literal path", async () => {
+		const result = await handleToolCall(
+			bashEvent(
+				`python3 -c 'from pathlib import Path; Path("/home/user/out.txt").open("w")'`,
+			),
+			makeCtx("/tmp"),
+			config,
+		);
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("/home/user/out.txt");
+	});
+
+	it("asks for a conflicting interpreter invocation even with benign extracted source", async () => {
+		const ctx = makeCtx("/tmp");
+		const result = await handleToolCall(
+			bashEvent("python3 ./unknown.py <<'PY'\nprint(1)\nPY"),
+			ctx,
+			config,
+		);
+		expect(result).toBeUndefined(); // test UI chooses Allow
+		expect((ctx.ui.select as ReturnType<typeof mock>).mock.calls.length).toBe(
+			1,
+		);
+		expect(
+			(ctx.ui.select as ReturnType<typeof mock>).mock.calls[0]?.[0],
+		).toContain("script files are not yet analyzed");
+	});
+
+	it("denies a Bun TypeScript write to a locked literal path", async () => {
+		const result = await handleToolCall(
+			bashEvent(
+				`bun -e 'const p: string = "/home/user/out.txt"; Bun.write(p, "x")'`,
+			),
+			makeCtx("/tmp"),
+			config,
+		);
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("/home/user/out.txt");
+	});
+
+	it("asks when an interpreter write target is dynamic", async () => {
+		const ctx = makeCtx("/tmp");
+		const result = await handleToolCall(
+			bashEvent(`python3 -c 'open(get_path(), "w")'`),
+			ctx,
+			config,
+		);
+		expect(result).toBeUndefined(); // test UI chooses Allow
+		expect((ctx.ui.select as ReturnType<typeof mock>).mock.calls.length).toBe(
+			1,
+		);
+		expect(
+			(ctx.ui.select as ReturnType<typeof mock>).mock.calls[0]?.[0],
+		).toContain("dynamic path");
+	});
+
+	it("fails closed when an interpreter ask is dismissed", async () => {
+		const ctx = makeCtx("/tmp");
+		ctx.ui.select = mock(async () => undefined) as any;
+		const result = await handleToolCall(
+			bashEvent(`node -e 'require("fs").writeFileSync(getPath(), "x")'`),
+			ctx,
+			config,
+		);
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("Blocked by user");
+	});
+
+	it("silently allows source proven read-only under an open policy", async () => {
+		const ctx = makeCtx("/tmp");
+		const result = await handleToolCall(
+			bashEvent(`python3 -c 'print(1)'`),
+			ctx,
+			config,
+		);
+		expect(result).toBeUndefined();
+		expect((ctx.ui.select as ReturnType<typeof mock>).mock.calls.length).toBe(
+			0,
+		);
+	});
+
+	it("recursively analyzes env and shell wrappers", async () => {
+		const result = await handleToolCall(
+			bashEvent(
+				`env MODE=test bash -c "node -e 'require(\\"fs\\").writeFileSync(\\"/home/user/out.txt\\", \\"x\\")'"`,
+			),
+			makeCtx("/tmp"),
+			config,
+		);
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("/home/user/out.txt");
+	});
+
+	it("applies path protection to paths found in embedded source", async () => {
+		const protectedConfig: ControlsResolvedConfig = {
+			...config,
+			pathProtection: { "*.env": "deny" },
+		};
+		const result = await handleToolCall(
+			bashEvent(
+				`node -e 'require("fs").writeFileSync("/tmp/secret.env", "x")'`,
+			),
+			makeCtx("/tmp"),
+			protectedConfig,
+		);
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain('protected pattern "*.env"');
+	});
+
+	it("inform mode reports uncertainty without prompting or blocking", async () => {
+		const ctx = makeCtx("/tmp");
+		const result = await handleToolCall(
+			bashEvent(`python3 -c 'open(get_path(), "w")'`),
+			ctx,
+			config,
+			"inform",
+		);
+		expect(result).toBeUndefined();
+		expect((ctx.ui.select as ReturnType<typeof mock>).mock.calls.length).toBe(
+			0,
+		);
+		expect(
+			(ctx.ui.notify as ReturnType<typeof mock>).mock.calls[0]?.[0],
+		).toContain("would-ask");
+	});
+
+	it("can disable interpreter analysis explicitly", async () => {
+		const disabledConfig: ControlsResolvedConfig = {
+			...config,
+			interpreterAnalysis: null,
+		};
+		const ctx = makeCtx("/tmp");
+		const result = await handleToolCall(
+			bashEvent(`python3 -c 'open(get_path(), "w")'`),
+			ctx,
+			disabledConfig,
+		);
+		expect(result).toBeUndefined();
+		expect((ctx.ui.select as ReturnType<typeof mock>).mock.calls.length).toBe(
+			0,
+		);
+	});
+
+	it("can hard-deny unresolved source by configuration", async () => {
+		const denyUnknownConfig: ControlsResolvedConfig = {
+			...config,
+			interpreterAnalysis: {
+				enabled: true,
+				unknownAction: "deny",
+				maxSourceBytes: 262144,
+				maxDepth: 4,
+				maxNodes: 10000,
+			},
+		};
+		const result = await handleToolCall(
+			bashEvent(`python3 -c 'open(get_path(), "w")'`),
+			makeCtx("/tmp"),
+			denyUnknownConfig,
+		);
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("Access denied");
+		expect(result?.reason).toContain("could not prove the source safe");
+	});
+});
+
 describe("nudge action", () => {
 	const nudgeConfig: ControlsResolvedConfig = {
 		policies: {
@@ -155,6 +346,7 @@ describe("nudge action", () => {
 		},
 		locations: { "/tmp": "nudged" },
 		defaultPolicy: null,
+		cycleKey: "ctrl+shift+m",
 		agentTimeout: null,
 		nudgeTimeout: null,
 		pathProtection: null,
@@ -193,6 +385,7 @@ describe("agentTimeout escalation (deny → ask)", () => {
 		},
 		locations: {},
 		defaultPolicy: "locked",
+		cycleKey: "ctrl+shift+m",
 		agentTimeout: { maxDenies: 3, windowSeconds: 60 },
 		nudgeTimeout: null,
 		pathProtection: null,
@@ -324,8 +517,10 @@ describe("nudgeTimeout escalation (nudge → deny)", () => {
 		},
 		locations: { "/tmp": "nudged" },
 		defaultPolicy: null,
+		cycleKey: "ctrl+shift+m",
 		agentTimeout: null,
 		nudgeTimeout: { maxNudges: 3, windowSeconds: 60 },
+		pathProtection: null,
 	};
 
 	const noNudgeTimeoutConfig: ControlsResolvedConfig = {
@@ -453,8 +648,10 @@ describe("nudgeTimeout escalation (nudge → deny)", () => {
 			},
 			locations: { "/tmp": "nudged" },
 			defaultPolicy: null,
+			cycleKey: "ctrl+shift+m",
 			agentTimeout: null,
 			nudgeTimeout: { maxNudges: 2, windowSeconds: 60 },
+			pathProtection: null,
 		};
 
 		const ctx = makeCtx("/tmp");
@@ -500,8 +697,10 @@ describe("nudgeTimeout escalation (nudge → deny)", () => {
 			},
 			locations: { "/tmp": "cwd" },
 			defaultPolicy: null,
+			cycleKey: "ctrl+shift+m",
 			agentTimeout: null,
 			nudgeTimeout: { maxNudges: 2, windowSeconds: 60 },
+			pathProtection: null,
 		};
 
 		const ctx = makeCtx("/tmp");

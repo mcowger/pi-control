@@ -456,18 +456,41 @@ Even though `/tmp` is relaxed, the fact that the command touches a strict locati
 
 ## Bash Command Parsing
 
-Bash commands are parsed using [bash-parser](https://www.npmjs.com/package/bash-parser), which produces a full AST with command names, arguments, and redirect targets.
+Bash, Python, JavaScript, and TypeScript are parsed with the prebuilt Tree-sitter WASM grammars distributed by [`@vscode/tree-sitter-wasm`](https://www.npmjs.com/package/@vscode/tree-sitter-wasm).
 
-From each pipeline stage, pi-controls extracts:
+From each shell stage, pi-controls extracts:
+
 - **Command name + arguments** — used for pattern matching against bash rules
 - **File redirect targets** — paths like `> /tmp/out.txt` or `>> log.txt` checked against location policies
-- **fd-to-fd redirects** like `2>&1` — recognized and skipped (they don't target files)
+- **fd-to-fd redirects** like `2>&1` — recognized and skipped because they do not target files
+- **Heredoc and here-string source** — associated with interpreter invocations when static
+- **Inline interpreter source** — Python `-c`, Node `-e`/`--eval`/`-p`, and Bun `-e`/`--eval`
 
-Each pipeline stage (`|`, `&&`, `;`) is evaluated independently. The most restrictive action across all stages wins.
+Each pipeline or logical stage (`|`, `&&`, `;`) is evaluated independently. The most restrictive action across all stages and discovered targets wins.
 
-**If parsing fails** (malformed input), pi-controls falls back to a regex tokenizer that treats the raw command string as a single stage with no redirect targets. This is conservative — the command is still checked against the CWD policy.
+### Interpreter source analysis
 
-**If bash-parser fails to load at startup**, a warning is shown in the pi UI and the regex fallback is used for all bash calls.
+Source supplied to Python, Node, or Bun is inspected for common filesystem operations. Literal paths are fed into the same location and path-protection checks as ordinary Bash arguments. Static `env`, `bash -c`, and `sh -c` wrappers are unwrapped recursively.
+
+Examples detected by this layer include:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+Path("/outside/project/out.txt").write_text("data")
+PY
+
+node -e 'require("fs").writeFileSync("/outside/project/out.txt", "data")'
+bun -e 'const p: string = "/outside/project/out.txt"; Bun.write(p, "data")'
+```
+
+Analysis is deliberately conservative. Dynamic paths, unknown calls, unknown imports, subprocess execution, `eval`, parser errors, script files, unavailable standard-input source, and exceeded resource limits produce the configured `unknownAction`. The default is `ask`; if no approval is available, the call is blocked. Set it to `deny` for unattended environments.
+
+Simple source whose calls and effects are fully understood remains silent under an allowing policy, for example `python3 -c 'print(1)'` or `node -e 'console.log("ok")'`.
+
+This is static policy analysis, not an execution sandbox. Code can be arbitrarily dynamic, so unsupported or ambiguous constructs are never treated as proof of safety.
+
+**If Tree-sitter fails to load**, pi-controls falls back to an incomplete tokenizer. Ordinary commands still use CWD policy evaluation, while interpreter-shaped input is treated conservatively rather than failing open.
 
 ---
 
@@ -933,6 +956,17 @@ Pair this with a strict `defaultAction: "deny"` policy to maximize the benefit: 
 | `defaultPolicy` | `string \| null` | No | Policy to apply when no location matches. `null` or absent = fail-open. |
 | `agentTimeout` | `AgentTimeout \| null` | No | Circuit breaker: escalate `deny` → `ask` when the deny rate exceeds the threshold. `null` or absent = disabled. |
 | `nudgeTimeout` | `NudgeTimeout \| null` | No | Circuit breaker: escalate `nudge` → `deny` when the same nudge rule is ignored too many times. `null` or absent = disabled. |
+| `interpreterAnalysis` | `InterpreterAnalysis \| null` | No | Conservative analysis of Python, Node, Bun, and nested shell source. Defaults to enabled; `null` disables it. |
+
+### InterpreterAnalysis fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `boolean` | `true` | Enable interpreter source analysis. |
+| `unknownAction` | `"ask" \| "deny"` | `"ask"` | Action when source, effects, or target paths cannot be fully analyzed. |
+| `maxSourceBytes` | `number` | `262144` | Maximum embedded source size accepted for analysis. |
+| `maxDepth` | `number` | `4` | Maximum recursive `bash -c`/`sh -c` wrapper depth. |
+| `maxNodes` | `number` | `10000` | Maximum syntax-tree nodes visited per embedded source. |
 
 ### AgentTimeout fields
 

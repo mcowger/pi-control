@@ -13,7 +13,10 @@ const config: ControlsResolvedConfig = {
 		"/tmp": "relaxed",
 	},
 	defaultPolicy: null,
+	cycleKey: "ctrl+shift+m",
 	agentTimeout: null,
+	nudgeTimeout: null,
+	pathProtection: null,
 };
 
 const cwd = "/home/user";
@@ -73,7 +76,10 @@ describe("resolvePolicy — cwd special location key", () => {
 			"/tmp": "locked",
 		},
 		defaultPolicy: "locked",
+		cycleKey: "ctrl+shift+m",
 		agentTimeout: null,
+		nudgeTimeout: null,
+		pathProtection: null,
 	};
 
 	it("matches the cwd directory itself", () => {

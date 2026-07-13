@@ -4,7 +4,11 @@ import type {
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
 import type { ControlsMode } from "../index.js";
-import type { ControlsResolvedConfig, Action } from "../config.js";
+import {
+	DEFAULT_INTERPRETER_ANALYSIS,
+	type ControlsResolvedConfig,
+	type Action,
+} from "../config.js";
 import { resolvePolicy } from "../utils/location.js";
 import {
 	matchCommand,
@@ -17,6 +21,7 @@ import { logDecision } from "../utils/logger.js";
 import { minimatch } from "minimatch";
 import { DenyTracker } from "../utils/deny-tracker.js";
 import { suggestSessionPattern } from "../utils/bash-arity.js";
+import { analyzeCommandStageSource } from "../utils/command-source-analysis.js";
 
 /**
  * Nudge messages pending injection into tool results, keyed by toolCallId.
@@ -207,21 +212,40 @@ function buildToolSummary(event: ToolCallEvent): string | undefined {
  * If a file path matches a deny rule, the call is blocked regardless of
  * location-based policies. Returns undefined (allow) or a deny block result.
  */
+function checkProtectedPaths(
+	pathsToCheck: string[],
+	config: ControlsResolvedConfig,
+): ToolCallEventResult | undefined {
+	const patterns = config.pathProtection;
+	if (!patterns || Object.keys(patterns).length === 0) return undefined;
+
+	for (const path of pathsToCheck) {
+		const basename = path.split("/").pop() ?? path;
+		for (const [pattern, action] of Object.entries(patterns)) {
+			const matches =
+				minimatch(basename, pattern, { dot: true }) ||
+				minimatch(path, pattern, { dot: true });
+			if (matches && action === "deny") {
+				return {
+					block: true,
+					reason: `[pi-controls] Access denied — path "${path}" matches protected pattern "${pattern}".`,
+				};
+			}
+		}
+	}
+	return undefined;
+}
+
 function checkPathProtection(
 	toolName: string,
 	event: ToolCallEvent,
 	cwd: string,
 	config: ControlsResolvedConfig,
 ): ToolCallEventResult | undefined {
-	const patterns = config.pathProtection;
-	if (!patterns || Object.keys(patterns).length === 0) return undefined;
-
 	const input = event.input as Record<string, unknown>;
 	const pathsToCheck: string[] = [];
 
-	// Extract paths relevant to this tool.
 	if (toolName === "bash") {
-		// For bash, extract path-likely tokens from the command.
 		const cmd = typeof input.command === "string" ? input.command : "";
 		for (const token of cmd.split(/\s+/)) {
 			if (
@@ -236,25 +260,7 @@ function checkPathProtection(
 		pathsToCheck.push(...getTargetPaths(event, cwd));
 	}
 
-	// Check each path against all protection patterns.
-	for (const path of pathsToCheck) {
-		// Try directory-style prefix match and full glob match.
-		const basename = path.split("/").pop() ?? path;
-		for (const [pattern, action] of Object.entries(patterns)) {
-			// Match against basename (for patterns like "*.env") and full path.
-			const matches =
-				minimatch(basename, pattern, { dot: true }) ||
-				minimatch(path, pattern, { dot: true });
-			if (matches && action === "deny") {
-				return {
-					block: true,
-					reason: `[pi-controls] Access denied — path "${path}" matches protected pattern "${pattern}".`,
-				};
-			}
-		}
-	}
-
-	return undefined;
+	return checkProtectedPaths(pathsToCheck, config);
 }
 
 function notifyDecision(
@@ -307,6 +313,7 @@ async function executeAction(
 	nudgeMessage?: string,
 	escalatedFromNudge?: string,
 	summary?: string,
+	decisionReason?: string,
 ): Promise<ToolCallEventResult | undefined> {
 	switch (action) {
 		case "allow":
@@ -367,6 +374,9 @@ async function executeAction(
 		case "deny": {
 			const cmdPart = command ? ` (${command.slice(0, 80)})` : "";
 			const context = buildContextSuffix(deniedPaths, matchedPattern);
+			const analysisNote = decisionReason
+				? ` Static analysis could not prove the source safe: ${decisionReason}.`
+				: "";
 			const pathNote =
 				deniedPaths.length > 0
 					? ` The restriction is on the PATH${deniedPaths.length > 1 ? "S" : ""} ${deniedPaths.map((p) => `"${p}"`).join(", ")} — not on the tool. Do NOT retry with a different tool (read, ls, glob, cat, etc.); all access to these paths is blocked.`
@@ -376,7 +386,7 @@ async function executeAction(
 				: "";
 			return {
 				block: true,
-				reason: `[pi-controls] Access denied by policy: ${toolName}${cmdPart}${context}.${pathNote}${nudgeNote}`,
+				reason: `[pi-controls] Access denied by policy: ${toolName}${cmdPart}${context}.${analysisNote}${pathNote}${nudgeNote}`,
 			};
 		}
 	}
@@ -468,6 +478,10 @@ export async function handleToolCall(
 		const input = event.input as { command: string };
 		const stages = await parseCommand(input.command);
 		const cmd = stages.map((s) => s.command).join(" | ");
+		const interpreterConfig =
+			config.interpreterAnalysis === null
+				? { ...DEFAULT_INTERPRETER_ANALYSIS, enabled: false }
+				: (config.interpreterAnalysis ?? DEFAULT_INTERPRETER_ANALYSIS);
 
 		const matchResults: {
 			action: Action;
@@ -476,13 +490,38 @@ export async function handleToolCall(
 			ruleKey?: string;
 		}[] = [];
 		const targets: string[] = [];
+		const discoveredPaths: string[] = [];
+		const analysisReasons: string[] = [];
 		let policyName: string | null = null;
 
 		for (const stage of stages) {
+			let analyzedPaths: string[] = [];
+			if (interpreterConfig.enabled) {
+				try {
+					const analysis = await analyzeCommandStageSource(stage, {
+						cwd,
+						maxDepth: interpreterConfig.maxDepth,
+						maxNodes: interpreterConfig.maxNodes,
+						maxSourceBytes: interpreterConfig.maxSourceBytes,
+					});
+					analyzedPaths = analysis.findings
+						.flatMap((finding) => (finding.path === null ? [] : [finding.path]))
+						.map((path) => normalizePath(path, cwd));
+					analysisReasons.push(
+						...analysis.unresolvedEffects,
+						...analysis.parseErrors,
+					);
+				} catch (error) {
+					analysisReasons.push(`Interpreter analysis failed: ${error}`);
+				}
+			}
+
 			const explicitPaths = [...stage.redirectFiles, ...stage.pathArgs].map(
-				(f) => normalizePath(f, cwd),
+				(path) => normalizePath(path, cwd),
 			);
-			const stageTargets = explicitPaths.length > 0 ? explicitPaths : [cwd];
+			const stageTargets = [...new Set([...explicitPaths, ...analyzedPaths])];
+			discoveredPaths.push(...stageTargets);
+			if (stageTargets.length === 0) stageTargets.push(cwd);
 
 			for (const target of stageTargets) {
 				targets.push(target);
@@ -504,46 +543,59 @@ export async function handleToolCall(
 			}
 		}
 
+		const uniqueTargets = [...new Set(targets)];
+		const analyzedPathBlock = checkProtectedPaths(
+			[...new Set(discoveredPaths)],
+			config,
+		);
+		if (analyzedPathBlock) return analyzedPathBlock;
+
+		const uniqueAnalysisReasons = [...new Set(analysisReasons)];
+		if (uniqueAnalysisReasons.length > 0) {
+			matchResults.push({ action: interpreterConfig.unknownAction });
+		}
+
 		if (matchResults.length === 0) {
 			await logDecision({
 				ts: new Date().toISOString(),
 				tool: "bash",
 				command: cmd,
 				cwd,
-				targets,
+				targets: uniqueTargets,
 				policyName: null,
 				action: "pass",
 			});
 			return undefined;
 		}
 
-		const actions = matchResults.map((r) => r.action);
+		const actions = matchResults.map((result) => result.action);
 		const finalAction = mostRestrictive(actions);
-
-		// Find the most specific matched pattern (prefer actions with patterns)
 		const matchedPattern = matchResults
-			.filter((r) => r.action === finalAction && r.matchedPattern !== undefined)
-			.map((r) => r.matchedPattern!)
+			.filter(
+				(result) =>
+					result.action === finalAction && result.matchedPattern !== undefined,
+			)
+			.map((result) => result.matchedPattern!)
 			.sort((a, b) => b.length - a.length)[0];
-
-		// Pick the nudge message and rule key from any result that contributed to the final action.
 		const nudgeMatch = matchResults.find(
-			(r) => r.action === finalAction && r.nudgeMessage !== undefined,
+			(result) =>
+				result.action === finalAction && result.nudgeMessage !== undefined,
 		);
 		const nudgeMessage = nudgeMatch?.nudgeMessage;
 		const bashNudgeKey =
 			nudgeMatch?.ruleKey ?? nudgeKey("bash", matchedPattern);
-
-		const deniedTargets = finalAction === "deny" ? targets : [];
+		const deniedTargets = finalAction === "deny" ? uniqueTargets : [];
+		const analysisReason = uniqueAnalysisReasons.join("; ");
 
 		await logDecision({
 			ts: new Date().toISOString(),
 			tool: "bash",
 			command: cmd,
 			cwd,
-			targets,
+			targets: uniqueTargets,
 			policyName,
 			action: finalAction,
+			reason: analysisReason || undefined,
 		});
 		notifyDecision(
 			ctx,
@@ -567,19 +619,23 @@ export async function handleToolCall(
 			finalAction === "nudge" && effectiveBashAction === "deny"
 				? nudgeMessage
 				: undefined;
+		const summary = analysisReason
+			? `${cmd.slice(0, 80)}; unresolved source: ${analysisReason.slice(0, 160)}`
+			: cmd.slice(0, 120) || "bash";
 		return executeAction(
 			effectiveBashAction,
 			"bash",
 			cmd,
 			ctx,
 			effectiveBashAction === "deny" || effectiveBashAction === "ask"
-				? targets
+				? uniqueTargets
 				: deniedTargets,
 			matchedPattern,
 			event.toolCallId,
 			nudgeMessage,
 			bashEscalatedFromNudge,
-			cmd.slice(0, 120) || "bash",
+			summary,
+			analysisReason || undefined,
 		);
 	}
 

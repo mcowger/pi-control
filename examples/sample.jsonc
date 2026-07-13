@@ -151,6 +151,20 @@
 	// Defaults to "ctrl+shift+m" when absent.
 	"cycleKey": "ctrl+shift+m",
 
+	// ── Interpreter source analysis ────────────────────────────────────────────
+	// Inspect Python, Node, Bun, and nested shell source supplied through inline
+	// evaluation flags, heredocs, and here-strings. Literal filesystem paths are
+	// evaluated through the normal location policies. Dynamic paths, unknown
+	// calls/imports, subprocesses, parser errors, and other unresolved effects
+	// use unknownAction. Set this object to null to disable the feature.
+	"interpreterAnalysis": {
+		"enabled": true,
+		"unknownAction": "ask", // use "deny" for unattended environments
+		"maxSourceBytes": 262144,
+		"maxDepth": 4,
+		"maxNodes": 10000
+	},
+
 	// ── Agent timeout (circuit breaker) ───────────────────────────────────────
 	// Optional. When the agent racks up `maxDenies` denied tool calls within
 	// `windowSeconds` seconds, the next denied call is escalated from a silent
