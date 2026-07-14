@@ -1,4 +1,8 @@
 import { describe, expect, it, beforeAll, beforeEach, mock } from "bun:test"; // mock kept for ctx stubs
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { mkdir, readFile } from "node:fs/promises";
 import { initBashParser } from "../../src/utils/bash-ast.js";
 import {
 	handleToolCall,
@@ -9,7 +13,10 @@ import {
 	nudgeTrackers,
 	nudgeKey,
 } from "../../src/hooks/tool-call.js";
-import type { ControlsResolvedConfig } from "../../src/config.js";
+import type {
+	ControlsConfig,
+	ControlsResolvedConfig,
+} from "../../src/config.js";
 import type {
 	BashToolCallEvent,
 	ExtensionContext,
@@ -20,6 +27,28 @@ beforeAll(async () => {
 });
 
 // Minimal ExtensionContext stub.
+let tmpHome: string | null = null;
+let afterHome: string | undefined;
+
+function setupTmpHome(): string {
+	if (tmpHome) {
+		throw new Error("tmp home already set; call cleanupTmpHome() first");
+	}
+	tmpHome = mkdtempSync(join(tmpdir(), "pi-controls-trust-"));
+	afterHome = process.env.HOME;
+	process.env.HOME = tmpHome;
+	process.env.PI_CODING_AGENT_DIR = join(tmpHome, "agent");
+	return tmpHome;
+}
+
+function cleanupTmpHome(): void {
+	tmpHome = null;
+	if (afterHome === undefined) delete process.env.HOME;
+	else process.env.HOME = afterHome;
+	delete process.env.PI_CODING_AGENT_DIR;
+	afterHome = undefined;
+}
+
 function makeCtx(cwd: string): ExtensionContext {
 	return {
 		cwd,
@@ -37,6 +66,10 @@ function makeCtx(cwd: string): ExtensionContext {
 }
 
 function bashEvent(command: string, id = "test-id"): BashToolCallEvent {
+	return makeBash(command, id);
+}
+
+function makeBash(command: string, id = "test-id"): BashToolCallEvent {
 	return {
 		type: "tool_call",
 		toolCallId: id,
@@ -195,6 +228,98 @@ describe("tool-call handler — interpreter source analysis", () => {
 		);
 		expect(title).toContain("Policy-evaluated target:\n• /tmp/unknown.py");
 		expect(title).not.toContain("blocked path");
+	});
+
+	it("short-circuits the unknown-action fallback when every matched policy allow rule already trusts unanalyzed source", async () => {
+		const config: ControlsResolvedConfig = {
+			policies: {
+				project: {
+					defaultAction: "allow",
+					rules: [
+						{
+							action: "allow",
+							tool: "bash",
+							pattern: "bun run*",
+							allowUnanalyzed: true,
+						},
+					],
+				},
+			},
+			locations: { $cwd: "project" },
+			approvalRules: [],
+			defaultPolicy: null,
+			cycleKey: "ctrl+shift+m",
+			agentTimeout: null,
+			nudgeTimeout: null,
+			pathProtection: null,
+			interpreterAnalysis: {
+				enabled: true,
+				unknownAction: "ask",
+				maxSourceBytes: 256 * 1024,
+				maxDepth: 4,
+				maxNodes: 10_000,
+			},
+		};
+		const ctx = makeCtx("/tmp");
+		const event = makeBash(
+			"bun -e 'const sys = require(\"os\").platform();' ./src/index.ts",
+		);
+		const result = await handleToolCall(event, ctx, config);
+		expect(result).toBeUndefined();
+		expect(pendingNudges.size).toBe(0);
+	});
+
+	it("offers a Trust this pattern choice for interpreter fallback prompts", async () => {
+		const tmpDir = setupTmpHome();
+		try {
+			await mkdir(join(tmpDir, ".pi/extensions"), { recursive: true });
+			const config: ControlsResolvedConfig = {
+				policies: {
+					project: { defaultAction: "allow", rules: [] },
+				},
+				locations: { $cwd: "project" },
+				approvalRules: [],
+				defaultPolicy: null,
+				cycleKey: "ctrl+shift+m",
+				agentTimeout: null,
+				nudgeTimeout: null,
+				pathProtection: null,
+				interpreterAnalysis: {
+					enabled: true,
+					unknownAction: "ask",
+					maxSourceBytes: 256 * 1024,
+					maxDepth: 4,
+					maxNodes: 10_000,
+				},
+			};
+			const ctx = makeCtx(tmpDir);
+			const event = makeBash("python3 - <<'PY'\nimport custom_module\nPY");
+			ctx.ui.select = (async (title: string, options: string[]) => {
+				expect(title).toContain("Reason for confirmation");
+				expect(options).toContain("Trust this pattern");
+				expect(options).toContain("Allow for Project");
+				return "Trust this pattern";
+			}) as unknown as typeof ctx.ui.select;
+			await handleToolCall(event, ctx, config);
+			const projectConfigPath = join(
+				tmpDir,
+				"agent/extensions/pi-controls.jsonc",
+			);
+			const saved = JSON.parse(
+				await readFile(projectConfigPath, "utf-8"),
+			) as ControlsConfig;
+			const rule = saved.approvalRules?.find(
+				(entry) =>
+					entry.tool === "bash" &&
+					entry.action === "allow" &&
+					entry.allowUnanalyzed === true,
+			);
+			expect(rule?.policy).toBe("project");
+			expect(rule?.pattern).toBe("python3 *");
+		} finally {
+			cleanupTmpHome();
+			delete process.env.PI_CODING_AGENT_DIR;
+		}
 	});
 
 	it("allows an explicitly trusted unanalyzed Bun package script", async () => {

@@ -207,6 +207,17 @@ function buildAnalysisAskTitle(
 }
 
 /**
+ * Compact one-line reason string for use in notify/log lines and the "Trust"
+ * prompt option. Long reason lists are truncated so the agent does not have
+ * to scroll through a wall of text.
+ */
+function summarizeReasons(decisionReason: string, limit = 240): string {
+	const trimmed = decisionReason.trim();
+	if (trimmed.length <= limit) return trimmed;
+	return `${trimmed.slice(0, limit - 1)}…`;
+}
+
+/**
  * Build a human-readable summary of a tool call for richer ask prompts.
  * Returns undefined when no useful summary can be extracted.
  */
@@ -417,6 +428,9 @@ async function executeAction(
 			if (approvalPersistence) {
 				choices.push("Allow for Project", "Allow Globally");
 			}
+			if (decisionReason && approvalPersistence) {
+				choices.push("Trust this pattern");
+			}
 			choices.push("Deny");
 			const choice = await ctx.ui.select(title, choices);
 			if (!choice || choice === "Deny") {
@@ -468,6 +482,46 @@ async function executeAction(
 					return {
 						block: true,
 						reason: `[pi-controls] Could not save allow rule: ${error}`,
+					};
+				}
+			}
+			if (choice === "Trust this pattern" && approvalPersistence) {
+				try {
+					let policyName = approvalPersistence.policyNames[0];
+					if (approvalPersistence.policyNames.length > 1) {
+						const selected = await ctx.ui.select(
+							"[pi-controls] Choose policy for the trusted allow rule",
+							approvalPersistence.policyNames,
+						);
+						if (!selected) {
+							return {
+								block: true,
+								reason:
+									"[pi-controls] Blocked by user: no policy selected for trusted allow rule",
+							};
+						}
+						policyName = selected;
+					}
+					const rule = {
+						...approvalPersistence.rule,
+						policy: policyName,
+						allowUnanalyzed: true,
+					};
+					const saved = await addApprovalRule("global", ctx.cwd, rule);
+					if (saved.added) {
+						approvalPersistence.config.approvalRules = [
+							...(approvalPersistence.config.approvalRules ?? []),
+							rule,
+						];
+					}
+					ctx.ui.notify(
+						`[pi-controls] ${saved.added ? "Trusted" : "Already trusted"} allow rule for ${policyName}: ${saved.path}`,
+						"info",
+					);
+				} catch (error) {
+					return {
+						block: true,
+						reason: `[pi-controls] Could not save trusted allow rule: ${error}`,
 					};
 				}
 			}
@@ -672,7 +726,18 @@ export async function handleToolCall(
 		if (analyzedPathBlock) return analyzedPathBlock;
 
 		const uniqueAnalysisReasons = [...new Set(analysisReasons)];
-		if (uniqueAnalysisReasons.length > 0) {
+		const interpreterWasInvoked = stages.some(
+			(stage) => stage.embeddedSources.length > 0,
+		);
+		const earlyTrustedAllow =
+			uniqueAnalysisReasons.length > 0 &&
+			interpreterWasInvoked &&
+			matchResults.length > 0 &&
+			matchResults.every(
+				(result) =>
+					result.action === "allow" && result.allowUnanalyzed === true,
+			);
+		if (uniqueAnalysisReasons.length > 0 && !earlyTrustedAllow) {
 			matchResults.push({ action: interpreterConfig.unknownAction });
 		}
 
@@ -741,7 +806,7 @@ export async function handleToolCall(
 				? nudgeMessage
 				: undefined;
 		const summary = analysisReason
-			? `${cmd.slice(0, 80)}; unresolved source: ${analysisReason.slice(0, 160)}`
+			? `${cmd.slice(0, 80)}; unresolved source: ${summarizeReasons(analysisReason, 160)}`
 			: cmd.slice(0, 120) || "bash";
 		const approvalPersistence =
 			stages.length === 1 && policyNames.size > 0

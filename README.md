@@ -484,7 +484,11 @@ node -e 'require("fs").writeFileSync("/outside/project/out.txt", "data")'
 bun -e 'const p: string = "/outside/project/out.txt"; Bun.write(p, "data")'
 ```
 
-Runtime-provided pure helpers are recognized without treating them as third-party code: this includes common Python standard-library utilities such as `re`, `io.StringIO`, `json`, and string transformations, plus selected Node and Bun runtime helpers. Broader runtime modules are not blanket exemptions: known filesystem and process operations (for example `os.replace`, `io.open`, Node `fs.open`, `child_process`, and `Bun.spawn`) are still detected and sent through policy evaluation.
+Runtime-provided pure helpers are recognized without treating them as third-party code: this includes common Python standard-library utilities such as `re`, `io.StringIO`, `json`, and string transformations, plus selected Node and Bun runtime helpers. Broader runtime modules are not blanket exemptions: known filesystem and process operations (for example `os.replace`, `io.open`, Node `fs.open`, `child_process`, and `Bun.spawn`) are still detected and sent through policy evaluation. Static `.json` loads are reported as reads rather than as unanalyzed-module warnings.
+
+When a Bash call resolves entirely to allow rules that already set `"allowUnanalyzed": true`, the unknown-action fallback is skipped: the trust decision has already been made, so no confirmation prompt appears. Other layers (path protection, location policy) still apply.
+
+Interpreter fallbacks now offer an extra **Trust this pattern** choice. It writes a global allow rule with `allowUnanalyzed: true` for the matched command pattern, so future identical calls proceed without a prompt. Persistent policy, project, and trust selections are scoped to the resolved policy; multi-policy calls show a follow-up selector.
 
 Analysis is deliberately conservative. Dynamic paths, unknown calls, unknown imports, subprocess execution, `eval`, parser errors, script files, unavailable standard-input source, and exceeded resource limits produce the configured `unknownAction`. The default is `ask`; if no approval is available, the call is blocked. Set it to `deny` for unattended environments.
 
