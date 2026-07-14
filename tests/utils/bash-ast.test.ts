@@ -64,6 +64,21 @@ describe("parseCommand", () => {
 		expect(stages[0].pathArgs).toContain("../dest");
 	});
 
+	it("does not mistake a sed address range for an absolute path", async () => {
+		const stages = await parseCommand(
+			"sed -n '/private updateResponsesSnapshot/,/^  }$/p' src/services/inspectors/debug-logging.ts",
+		);
+		expect(stages[0].pathArgs).not.toContain(
+			"/private updateResponsesSnapshot/,/^  }$/p",
+		);
+		expect(stages[0].pathArgs).toEqual([]);
+	});
+
+	it("retains explicit sed script files and input paths", async () => {
+		const stages = await parseCommand("sed -f /tmp/rules.sed /tmp/input.txt");
+		expect(stages[0].pathArgs).toEqual(["/tmp/rules.sed", "/tmp/input.txt"]);
+	});
+
 	it("does not extract flags as path args", async () => {
 		const stages = await parseCommand("ls -la --color=auto");
 		expect(stages[0].pathArgs).toHaveLength(0);

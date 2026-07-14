@@ -243,7 +243,99 @@ function collectConstants(root: SyntaxNode, context: ValueContext): void {
 	}
 }
 
-const PYTHON_ALLOWED_MODULES = new Set(["os", "pathlib", "shutil"]);
+/**
+ * Runtime-supplied standard-library modules. Their imports cannot execute
+ * project dependency code. Filesystem and process operations are still
+ * recognized below before generic calls through these modules are trusted.
+ */
+const PYTHON_TRUSTED_MODULE_PREFIXES = [
+	"abc",
+	"ast",
+	"base64",
+	"binascii",
+	"bisect",
+	"collections",
+	"copy",
+	"dataclasses",
+	"datetime",
+	"decimal",
+	"difflib",
+	"enum",
+	"functools",
+	"hashlib",
+	"heapq",
+	"io",
+	"itertools",
+	"json",
+	"math",
+	"operator",
+	"os",
+	"pathlib",
+	"re",
+	"shutil",
+	"statistics",
+	"string",
+	"textwrap",
+	"time",
+	"typing",
+	"unicodedata",
+	"uuid",
+] as const;
+
+function hasTrustedPythonModulePrefix(name: string): boolean {
+	return PYTHON_TRUSTED_MODULE_PREFIXES.some(
+		(prefix) => name === prefix || name.startsWith(`${prefix}.`),
+	);
+}
+
+const PYTHON_PURE_METHODS = new Set([
+	"capitalize",
+	"casefold",
+	"center",
+	"count",
+	"decode",
+	"encode",
+	"endswith",
+	"expandtabs",
+	"find",
+	"format",
+	"index",
+	"isalnum",
+	"isalpha",
+	"isascii",
+	"isdecimal",
+	"isdigit",
+	"isidentifier",
+	"islower",
+	"isnumeric",
+	"isprintable",
+	"isspace",
+	"istitle",
+	"isupper",
+	"join",
+	"ljust",
+	"lower",
+	"lstrip",
+	"partition",
+	"removeprefix",
+	"removesuffix",
+	"replace",
+	"rfind",
+	"rindex",
+	"rjust",
+	"rpartition",
+	"rsplit",
+	"rstrip",
+	"split",
+	"splitlines",
+	"startswith",
+	"strip",
+	"swapcase",
+	"title",
+	"translate",
+	"upper",
+	"zfill",
+]);
 const PYTHON_PURE_CALLS = new Set([
 	"Path",
 	"bool",
@@ -297,7 +389,15 @@ const PATH_READ_METHODS = new Set([
 ]);
 const PYTHON_MODULE_WRITES: Record<string, number[]> = {
 	"os.chmod": [0],
+	"os.chown": [0],
+	"os.fchmod": [0],
+	"os.fchown": [0],
+	"os.ftruncate": [0],
+	"os.lchown": [0],
 	"os.link": [0, 1],
+	"os.open": [0],
+	"os.mkfifo": [0],
+	"os.mknod": [0],
 	"os.makedirs": [0],
 	"os.mkdir": [0],
 	"os.remove": [0],
@@ -308,20 +408,44 @@ const PYTHON_MODULE_WRITES: Record<string, number[]> = {
 	"os.symlink": [0, 1],
 	"os.truncate": [0],
 	"os.unlink": [0],
+	"os.utime": [0],
+	"shutil.chown": [0],
+	"shutil.copymode": [0, 1],
+	"shutil.copystat": [0, 1],
 	"shutil.copy": [0, 1],
 	"shutil.copy2": [0, 1],
 	"shutil.copyfile": [0, 1],
 	"shutil.copytree": [0, 1],
+	"shutil.make_archive": [0],
 	"shutil.move": [0, 1],
 	"shutil.rmtree": [0],
+	"shutil.unpack_archive": [1],
 };
 const PYTHON_MODULE_READS: Record<string, number[]> = {
+	"os.access": [0],
 	"os.listdir": [0],
 	"os.lstat": [0],
 	"os.readlink": [0],
 	"os.scandir": [0],
 	"os.stat": [0],
+	"os.walk": [0],
+	"shutil.disk_usage": [0],
 };
+const PYTHON_EXECUTE_CALLS = new Set([
+	"eval",
+	"exec",
+	"os.fork",
+	"os.forkpty",
+	"os.popen",
+	"os.startfile",
+	"os.system",
+]);
+const PYTHON_EXECUTE_PREFIXES = [
+	"os.exec",
+	"os.posix_spawn",
+	"os.spawn",
+	"subprocess.",
+];
 
 function collectPythonImports(
 	root: SyntaxNode,
@@ -337,7 +461,7 @@ function collectPythonImports(
 				const moduleName = child.text.split(/\s+as\s+/)[0];
 				const local =
 					child.text.split(/\s+as\s+/)[1] ?? moduleName.split(".")[0];
-				if (!PYTHON_ALLOWED_MODULES.has(moduleName)) {
+				if (!hasTrustedPythonModulePrefix(moduleName)) {
 					analysis.unresolvedEffects.push(
 						`Python import executes unanalyzed module: ${moduleName}`,
 					);
@@ -348,7 +472,7 @@ function collectPythonImports(
 			const moduleNode = node.childForFieldName("module_name");
 			const moduleName = moduleNode?.text;
 			if (!moduleName) return;
-			if (!PYTHON_ALLOWED_MODULES.has(moduleName)) {
+			if (!hasTrustedPythonModulePrefix(moduleName)) {
 				analysis.unresolvedEffects.push(
 					`Python import executes unanalyzed module: ${moduleName}`,
 				);
@@ -392,7 +516,7 @@ function analyzePython(root: SyntaxNode, cwd: string): SourceAnalysis {
 		let name = callName(fn, context);
 		if (name && importedCalls.has(name)) name = importedCalls.get(name) ?? name;
 
-		if (name === "open" && fn.type === "identifier") {
+		if ((name === "open" && fn.type === "identifier") || name === "io.open") {
 			const path = resolveValue(pythonArgument(args, 0, "file"), context);
 			const mode =
 				resolveValue(pythonArgument(args, 1, "mode"), context) ?? "r";
@@ -488,14 +612,20 @@ function analyzePython(root: SyntaxNode, cwd: string): SourceAnalysis {
 				return;
 			}
 		}
-		if (["eval", "exec", "os.system"].includes(name ?? "")) {
+		if (
+			PYTHON_EXECUTE_CALLS.has(name ?? "") ||
+			PYTHON_EXECUTE_PREFIXES.some((prefix) => name?.startsWith(prefix))
+		) {
 			addFinding(analysis, "execute", null, `Python ${name}`);
 			return;
 		}
+		const operation = name?.split(".").at(-1);
 		if (
 			context.pathConstructors.has(name ?? "") ||
 			PYTHON_PURE_CALLS.has(name ?? "") ||
-			name === "os.path.join"
+			name === "os.path.join" ||
+			hasTrustedPythonModulePrefix(name ?? "") ||
+			(operation !== undefined && PYTHON_PURE_METHODS.has(operation))
 		)
 			return;
 		analysis.unresolvedEffects.push(`Unknown Python call: ${name ?? fn.text}`);
@@ -504,19 +634,60 @@ function analyzePython(root: SyntaxNode, cwd: string): SourceAnalysis {
 }
 
 function normalizeJsModule(moduleName: string): string {
-	if (moduleName === "fs" || moduleName === "node:fs") return "fs";
-	if (moduleName === "fs/promises" || moduleName === "node:fs/promises")
-		return "fs/promises";
-	if (moduleName === "path" || moduleName === "node:path") return "path";
-	return moduleName;
+	return moduleName.startsWith("node:") ? moduleName.slice(5) : moduleName;
 }
 
-const JS_ALLOWED_MODULES = new Set(["fs", "fs/promises", "path"]);
+/** A static JSON load parses data; it does not execute a JavaScript module. */
+function isJsonModule(moduleName: string): boolean {
+	return moduleName.toLowerCase().endsWith(".json");
+}
+
+/**
+ * Runtime modules whose imports are safe to trust. Filesystem and process
+ * operations are recognized separately, so this only avoids false positives
+ * for bundled module loading and non-mutating helpers.
+ */
+const JS_TRUSTED_MODULES = new Set([
+	"assert",
+	"assert/strict",
+	"buffer",
+	"bun:jsc",
+	"bun:test",
+	"bun:wrap",
+	"child_process",
+	"constants",
+	"crypto",
+	"events",
+	"fs",
+	"fs/promises",
+	"os",
+	"path",
+	"perf_hooks",
+	"process",
+	"punycode",
+	"querystring",
+	"stream",
+	"string_decoder",
+	"timers",
+	"timers/promises",
+	"url",
+	"util",
+	"v8",
+	"zlib",
+]);
+
+function hasTrustedJsModule(name: string): boolean {
+	return [...JS_TRUSTED_MODULES].some(
+		(moduleName) => name === moduleName || name.startsWith(`${moduleName}.`),
+	);
+}
 const JS_WRITE_METHODS: Record<string, number[]> = {
 	appendFile: [0],
 	appendFileSync: [0],
 	chmod: [0],
 	chmodSync: [0],
+	chown: [0],
+	chownSync: [0],
 	copyFile: [0, 1],
 	copyFileSync: [0, 1],
 	cp: [0, 1],
@@ -524,7 +695,13 @@ const JS_WRITE_METHODS: Record<string, number[]> = {
 	createWriteStream: [0],
 	link: [0, 1],
 	linkSync: [0, 1],
+	lchown: [0],
+	lchownSync: [0],
+	lutimes: [0],
+	lutimesSync: [0],
 	mkdir: [0],
+	mkdtemp: [0],
+	mkdtempSync: [0],
 	mkdirSync: [0],
 	rename: [0, 1],
 	renameSync: [0, 1],
@@ -537,6 +714,10 @@ const JS_WRITE_METHODS: Record<string, number[]> = {
 	truncate: [0],
 	truncateSync: [0],
 	unlink: [0],
+	utimes: [0],
+	utimesSync: [0],
+	write: [0],
+	writeSync: [0],
 	unlinkSync: [0],
 	writeFile: [0],
 	writeFileSync: [0],
@@ -544,9 +725,12 @@ const JS_WRITE_METHODS: Record<string, number[]> = {
 const JS_READ_METHODS: Record<string, number[]> = {
 	access: [0],
 	accessSync: [0],
+	createReadStream: [0],
 	existsSync: [0],
 	lstat: [0],
 	lstatSync: [0],
+	opendir: [0],
+	opendirSync: [0],
 	readFile: [0],
 	readFileSync: [0],
 	readdir: [0],
@@ -555,8 +739,40 @@ const JS_READ_METHODS: Record<string, number[]> = {
 	readlinkSync: [0],
 	stat: [0],
 	statSync: [0],
+	watch: [0],
+	watchFile: [0],
 };
-const JS_PURE_PREFIXES = ["console.", "JSON.", "Math.", "path.", "node:path."];
+const JS_OPEN_METHODS = new Set(["open", "openSync"]);
+const JS_PURE_PREFIXES = [
+	"Buffer.",
+	"console.",
+	"JSON.",
+	"Math.",
+	"path.",
+	"URL.",
+	"URLSearchParams.",
+];
+const JS_PURE_CALLS = new Set([
+	"Array",
+	"BigInt",
+	"Boolean",
+	"Number",
+	"Object",
+	"String",
+]);
+const BUN_PURE_CALLS = new Set([
+	"Bun.deepEquals",
+	"Bun.escapeHTML",
+	"Bun.gzipSync",
+	"Bun.hash",
+	"Bun.inspect",
+	"Bun.nanoseconds",
+	"Bun.sleep",
+	"Bun.sleepSync",
+	"Bun.stringWidth",
+	"Bun.which",
+]);
+const BUN_EXECUTE_CALLS = new Set(["Bun.$", "Bun.spawn", "Bun.spawnSync"]);
 
 function collectJsImports(
 	root: SyntaxNode,
@@ -576,7 +792,7 @@ function collectJsImports(
 						: null;
 				if (rawModule) {
 					const moduleName = normalizeJsModule(rawModule);
-					if (!JS_ALLOWED_MODULES.has(moduleName)) {
+					if (!JS_TRUSTED_MODULES.has(moduleName) && !isJsonModule(rawModule)) {
 						analysis.unresolvedEffects.push(
 							`JavaScript require loads unanalyzed module: ${rawModule}`,
 						);
@@ -610,7 +826,11 @@ function collectJsImports(
 			return;
 		}
 		const moduleName = normalizeJsModule(rawModule);
-		if (!JS_ALLOWED_MODULES.has(moduleName)) {
+		if (isJsonModule(rawModule)) {
+			addFinding(analysis, "read", rawModule, "JavaScript JSON import");
+			return;
+		}
+		if (!JS_TRUSTED_MODULES.has(moduleName)) {
 			analysis.unresolvedEffects.push(
 				`JavaScript import executes unanalyzed module: ${rawModule}`,
 			);
@@ -669,9 +889,11 @@ function analyzeJavaScript(root: SyntaxNode, cwd: string): SourceAnalysis {
 
 		if (name === "require") {
 			const moduleName = resolveValue(args[0] ?? null, context);
-			if (
+			if (moduleName && isJsonModule(moduleName)) {
+				addFinding(analysis, "read", moduleName, "JavaScript require JSON");
+			} else if (
 				!moduleName ||
-				!JS_ALLOWED_MODULES.has(normalizeJsModule(moduleName))
+				!JS_TRUSTED_MODULES.has(normalizeJsModule(moduleName))
 			) {
 				analysis.unresolvedEffects.push(
 					`JavaScript require loads unanalyzed module: ${moduleName ?? "dynamic"}`,
@@ -680,6 +902,10 @@ function analyzeJavaScript(root: SyntaxNode, cwd: string): SourceAnalysis {
 			return;
 		}
 		const operation = name ? jsOperationName(name) : "";
+		if (BUN_EXECUTE_CALLS.has(name ?? "")) {
+			addFinding(analysis, "execute", null, `JavaScript ${name}`);
+			return;
+		}
 		if (name === "Bun.write") {
 			addFinding(
 				analysis,
@@ -707,10 +933,18 @@ function analyzeJavaScript(root: SyntaxNode, cwd: string): SourceAnalysis {
 			);
 			return;
 		}
-		if (
-			JS_WRITE_METHODS[operation] &&
-			/^(fs|fs\/promises|fs\.promises)\./.test(name ?? "")
-		) {
+		const isFsCall = /^(fs|fs\/promises|fs\.promises)\./.test(name ?? "");
+		if (isFsCall && JS_OPEN_METHODS.has(operation)) {
+			const flags = resolveValue(args[1] ?? null, context) ?? "r";
+			addFinding(
+				analysis,
+				/[wax+]/.test(flags) ? "write" : "read",
+				resolveValue(args[0] ?? null, context),
+				`Node ${name}(${flags})`,
+			);
+			return;
+		}
+		if (JS_WRITE_METHODS[operation] && isFsCall) {
 			for (const index of JS_WRITE_METHODS[operation]) {
 				addFinding(
 					analysis,
@@ -721,10 +955,7 @@ function analyzeJavaScript(root: SyntaxNode, cwd: string): SourceAnalysis {
 			}
 			return;
 		}
-		if (
-			JS_READ_METHODS[operation] &&
-			/^(fs|fs\/promises|fs\.promises)\./.test(name ?? "")
-		) {
+		if (JS_READ_METHODS[operation] && isFsCall) {
 			for (const index of JS_READ_METHODS[operation]) {
 				addFinding(
 					analysis,
@@ -744,6 +975,9 @@ function analyzeJavaScript(root: SyntaxNode, cwd: string): SourceAnalysis {
 		}
 		if (
 			name === "Bun.file" ||
+			JS_PURE_CALLS.has(name ?? "") ||
+			BUN_PURE_CALLS.has(name ?? "") ||
+			hasTrustedJsModule(name ?? "") ||
 			JS_PURE_PREFIXES.some((prefix) => name?.startsWith(prefix))
 		)
 			return;

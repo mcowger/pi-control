@@ -484,6 +484,8 @@ node -e 'require("fs").writeFileSync("/outside/project/out.txt", "data")'
 bun -e 'const p: string = "/outside/project/out.txt"; Bun.write(p, "data")'
 ```
 
+Runtime-provided pure helpers are recognized without treating them as third-party code: this includes common Python standard-library utilities such as `re`, `io.StringIO`, `json`, and string transformations, plus selected Node and Bun runtime helpers. Broader runtime modules are not blanket exemptions: known filesystem and process operations (for example `os.replace`, `io.open`, Node `fs.open`, `child_process`, and `Bun.spawn`) are still detected and sent through policy evaluation.
+
 Analysis is deliberately conservative. Dynamic paths, unknown calls, unknown imports, subprocess execution, `eval`, parser errors, script files, unavailable standard-input source, and exceeded resource limits produce the configured `unknownAction`. The default is `ask`; if no approval is available, the call is blocked. Set it to `deny` for unattended environments.
 
 When you explicitly trust a narrow class of unanalyzed interpreter invocations, add `"allowUnanalyzed": true` to its matching `allow` Bash rule. This bypasses only the interpreter-analysis fallback for that rule; normal rule matching and cross-cutting path protection still apply. For example, to trust package scripts while keeping direct Bun script files subject to analysis:

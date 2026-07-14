@@ -91,6 +91,54 @@ describe("analyzeSource — Python", () => {
 		expect(result.unresolvedEffects).toEqual([]);
 	});
 
+	it("trusts pure standard-library imports and string methods", async () => {
+		const result = await analyzeSource(
+			"python",
+			`import io\nimport re\ns = re.sub("-", "_", "a-b")\nprint(s.replace("_", "-"))\nbuffer = io.StringIO("ok")`,
+			options,
+		);
+		expect(result).toEqual({
+			findings: [],
+			unresolvedEffects: [],
+			parseErrors: [],
+		});
+	});
+
+	it("continues to identify standard-library file and process effects", async () => {
+		const result = await analyzeSource(
+			"python",
+			`import io\nimport os\nio.open("/outside/out.txt", "w")\nos.replace("/outside/old.txt", "/outside/new.txt")\nos.system("echo hello")`,
+			options,
+		);
+		expect(result.findings).toEqual(
+			expect.arrayContaining([
+				{
+					capability: "write",
+					path: "/outside/out.txt",
+					evidence: "Python open(w)",
+				},
+				{
+					capability: "write",
+					path: "/outside/old.txt",
+					evidence: "Python os.replace",
+				},
+				{
+					capability: "write",
+					path: "/outside/new.txt",
+					evidence: "Python os.replace",
+				},
+				{
+					capability: "execute",
+					path: null,
+					evidence: "Python os.system",
+				},
+			]),
+		);
+		expect(result.unresolvedEffects).toEqual([
+			"Python os.system has a dynamic path",
+		]);
+	});
+
 	it("marks syntax errors unresolved", async () => {
 		const result = await analyzeSource("python", `open("/tmp/x",`, options);
 		expect(result.parseErrors).toContain(
@@ -174,6 +222,71 @@ describe("analyzeSource — JavaScript and TypeScript", () => {
 			evidence: "Node fs.writeFileSync",
 		});
 		expect(result.unresolvedEffects).toEqual([]);
+	});
+
+	it("treats static JSON imports as reads rather than executable modules", async () => {
+		const requireResult = await analyzeSource(
+			"javascript",
+			`const packages = require("/tmp/pi-packages.json"); console.log(packages.length);`,
+			options,
+		);
+		const importResult = await analyzeSource(
+			"javascript",
+			`import packages from "./package.json"; console.log(packages.name);`,
+			options,
+		);
+		expect(requireResult.findings).toContainEqual({
+			capability: "read",
+			path: "/tmp/pi-packages.json",
+			evidence: "JavaScript require JSON",
+		});
+		expect(requireResult.unresolvedEffects).toEqual([]);
+		expect(importResult.findings).toContainEqual({
+			capability: "read",
+			path: "./package.json",
+			evidence: "JavaScript JSON import",
+		});
+		expect(importResult.unresolvedEffects).toEqual([]);
+	});
+
+	it("trusts Node runtime helpers and Bun pure APIs", async () => {
+		const nodeResult = await analyzeSource(
+			"javascript",
+			`import { format } from "node:util"; import os from "node:os"; console.log(format("%s-%s", os.platform(), "ok"));`,
+			options,
+		);
+		const bunResult = await analyzeSource(
+			"typescript",
+			`const id = Bun.hash("input"); console.log(Bun.escapeHTML(String(id)));`,
+			options,
+		);
+		expect(nodeResult.unresolvedEffects).toEqual([]);
+		expect(bunResult.unresolvedEffects).toEqual([]);
+	});
+
+	it("continues to identify Node filesystem and process effects", async () => {
+		const result = await analyzeSource(
+			"javascript",
+			`import fs from "node:fs"; import childProcess from "node:child_process"; fs.openSync("/outside/out.txt", "w"); childProcess.execFile("echo", ["ok"]);`,
+			options,
+		);
+		expect(result.findings).toEqual(
+			expect.arrayContaining([
+				{
+					capability: "write",
+					path: "/outside/out.txt",
+					evidence: "Node fs.openSync(w)",
+				},
+				{
+					capability: "execute",
+					path: null,
+					evidence: "JavaScript child_process.execFile",
+				},
+			]),
+		);
+		expect(result.unresolvedEffects).toEqual([
+			"JavaScript child_process.execFile has a dynamic path",
+		]);
 	});
 
 	it("finds Bun.write in TypeScript", async () => {

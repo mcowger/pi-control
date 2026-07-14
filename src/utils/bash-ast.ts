@@ -92,6 +92,79 @@ function isPathLike(token: string): boolean {
 	);
 }
 
+function commandBasename(command: string): string {
+	return command.split("/").at(-1) ?? command;
+}
+
+/**
+ * Extract path operands while excluding syntax that happens to start with `/`.
+ * In particular, a sed program such as `/pattern/,/^}$/p` is a regex range,
+ * not an absolute filesystem path. `-f` remains a real sed script file and is
+ * therefore kept as a path target when path-like.
+ */
+function pathArgsForCommand(args: CommandArgument[]): string[] {
+	if (args.length === 0 || !args[0].static) return [];
+	if (commandBasename(args[0].value) !== "sed") {
+		return args
+			.slice(1)
+			.filter((argument) => argument.static && isPathLike(argument.value))
+			.map((argument) => argument.value);
+	}
+
+	const paths: string[] = [];
+	let programSeen = false;
+	let optionsEnded = false;
+	for (let index = 1; index < args.length; index++) {
+		const argument = args[index];
+		if (!argument.static) continue;
+		const value = argument.value;
+
+		if (!optionsEnded && value === "--") {
+			optionsEnded = true;
+			continue;
+		}
+		if (!optionsEnded && (value === "-e" || value === "--expression")) {
+			programSeen = true;
+			index++;
+			continue;
+		}
+		if (!optionsEnded && (value === "-f" || value === "--file")) {
+			const file = args[++index];
+			if (file?.static && isPathLike(file.value)) paths.push(file.value);
+			programSeen = true;
+			continue;
+		}
+		if (!optionsEnded && value.startsWith("--expression=")) {
+			programSeen = true;
+			continue;
+		}
+		if (!optionsEnded && value.startsWith("--file=")) {
+			const file = value.slice("--file=".length);
+			if (isPathLike(file)) paths.push(file);
+			programSeen = true;
+			continue;
+		}
+		if (!optionsEnded && value.startsWith("-e") && value.length > 2) {
+			programSeen = true;
+			continue;
+		}
+		if (!optionsEnded && value.startsWith("-f") && value.length > 2) {
+			const file = value.slice(2);
+			if (isPathLike(file)) paths.push(file);
+			programSeen = true;
+			continue;
+		}
+		if (!optionsEnded && value.startsWith("-")) continue;
+
+		if (!programSeen) {
+			programSeen = true;
+			continue;
+		}
+		if (isPathLike(value)) paths.push(value);
+	}
+	return paths;
+}
+
 const DYNAMIC_SHELL_NODES = new Set([
 	"arithmetic_expansion",
 	"brace_expansion",
@@ -292,10 +365,7 @@ function buildStage(
 	}
 
 	const extracted = extractRedirects(redirects);
-	const pathArgs = args
-		.slice(1)
-		.filter((argument) => argument.static && isPathLike(argument.value))
-		.map((argument) => argument.value);
+	const pathArgs = pathArgsForCommand(args);
 
 	return {
 		command: args.map((argument) => argument.value).join(" "),
@@ -366,9 +436,7 @@ export async function parseCommand(command: string): Promise<CommandStage[]> {
 
 function regexFallback(command: string): CommandStage[] {
 	const args = tokenizeStaticWords(command);
-	const pathArgs = args
-		.filter((argument) => argument.static && isPathLike(argument.value))
-		.map((argument) => argument.value);
+	const pathArgs = pathArgsForCommand(args);
 	return [
 		{
 			command,
