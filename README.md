@@ -456,58 +456,18 @@ Even though `/tmp` is relaxed, the fact that the command touches a strict locati
 
 ## Bash Command Parsing
 
-Bash, Python, JavaScript, and TypeScript are parsed with the prebuilt Tree-sitter WASM grammars distributed by [`@vscode/tree-sitter-wasm`](https://www.npmjs.com/package/@vscode/tree-sitter-wasm).
+Bash commands are parsed with the prebuilt Tree-sitter Bash grammar distributed by [`@vscode/tree-sitter-wasm`](https://www.npmjs.com/package/@vscode/tree-sitter-wasm).
 
 From each shell stage, pi-controls extracts:
 
 - **Command name + arguments** — used for pattern matching against bash rules
 - **File redirect targets** — paths like `> /tmp/out.txt` or `>> log.txt` checked against location policies
 - **fd-to-fd redirects** like `2>&1` — recognized and skipped because they do not target files
-- **Heredoc and here-string source** — associated with interpreter invocations when static
-- **Inline interpreter source** — Python `-c`, Node `-e`/`--eval`/`-p`, and Bun `-e`/`--eval`
+- **Path-like arguments** — tokens like `~`, `/tmp/foo`, or `./bar` checked against location policies
 
 Each pipeline or logical stage (`|`, `&&`, `;`) is evaluated independently. The most restrictive action across all stages and discovered targets wins.
 
-### Interpreter source analysis
-
-Source supplied to Python, Node, or Bun is inspected for common filesystem operations. Literal paths are fed into the same location and path-protection checks as ordinary Bash arguments. Static `env`, `bash -c`, and `sh -c` wrappers are unwrapped recursively.
-
-Examples detected by this layer include:
-
-```bash
-python3 - <<'PY'
-from pathlib import Path
-Path("/outside/project/out.txt").write_text("data")
-PY
-
-node -e 'require("fs").writeFileSync("/outside/project/out.txt", "data")'
-bun -e 'const p: string = "/outside/project/out.txt"; Bun.write(p, "data")'
-```
-
-Runtime-provided pure helpers are recognized without treating them as third-party code: this includes common Python standard-library utilities such as `re`, `io.StringIO`, `json`, and string transformations, plus selected Node and Bun runtime helpers. Broader runtime modules are not blanket exemptions: known filesystem and process operations (for example `os.replace`, `io.open`, Node `fs.open`, `child_process`, and `Bun.spawn`) are still detected and sent through policy evaluation. Static `.json` loads are reported as reads rather than as unanalyzed-module warnings.
-
-When a Bash call resolves entirely to allow rules that already set `"allowUnanalyzed": true`, the unknown-action fallback is skipped: the trust decision has already been made, so no confirmation prompt appears. Other layers (path protection, location policy) still apply.
-
-Interpreter fallbacks now offer an extra **Trust this pattern** choice. It writes a global allow rule with `allowUnanalyzed: true` for the matched command pattern, so future identical calls proceed without a prompt. Persistent policy, project, and trust selections are scoped to the resolved policy; multi-policy calls show a follow-up selector.
-
-Analysis is deliberately conservative. Dynamic paths, unknown calls, unknown imports, subprocess execution, `eval`, parser errors, script files, unavailable standard-input source, and exceeded resource limits produce the configured `unknownAction`. The default is `ask`; if no approval is available, the call is blocked. Set it to `deny` for unattended environments.
-
-When you explicitly trust a narrow class of unanalyzed interpreter invocations, add `"allowUnanalyzed": true` to its matching `allow` Bash rule. This bypasses only the interpreter-analysis fallback for that rule; normal rule matching and cross-cutting path protection still apply. For example, to trust package scripts while keeping direct Bun script files subject to analysis:
-
-```json
-{
-  "action": "allow",
-  "tool": "bash",
-  "pattern": "bun run*",
-  "allowUnanalyzed": true
-}
-```
-
-Simple source whose calls and effects are fully understood remains silent under an allowing policy, for example `python3 -c 'print(1)'` or `node -e 'console.log("ok")'`.
-
-This is static policy analysis, not an execution sandbox. Code can be arbitrarily dynamic, so unsupported or ambiguous constructs are never treated as proof of safety.
-
-**If Tree-sitter fails to load**, pi-controls falls back to an incomplete tokenizer. Ordinary commands still use CWD policy evaluation, while interpreter-shaped input is treated conservatively rather than failing open.
+**If Tree-sitter fails to load**, pi-controls falls back to a simple tokenizer and ordinary CWD policy evaluation still applies.
 
 ---
 
@@ -974,17 +934,6 @@ Pair this with a strict `defaultAction: "deny"` policy to maximize the benefit: 
 | `defaultPolicy` | `string \| null` | No | Policy to apply when no location matches. `null` or absent = fail-open. |
 | `agentTimeout` | `AgentTimeout \| null` | No | Circuit breaker: escalate `deny` → `ask` when the deny rate exceeds the threshold. `null` or absent = disabled. |
 | `nudgeTimeout` | `NudgeTimeout \| null` | No | Circuit breaker: escalate `nudge` → `deny` when the same nudge rule is ignored too many times. `null` or absent = disabled. |
-| `interpreterAnalysis` | `InterpreterAnalysis \| null` | No | Conservative analysis of Python, Node, Bun, and nested shell source. Defaults to enabled; `null` disables it. |
-
-### InterpreterAnalysis fields
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | `boolean` | `true` | Enable interpreter source analysis. |
-| `unknownAction` | `"ask" \| "deny"` | `"ask"` | Action when source, effects, or target paths cannot be fully analyzed. |
-| `maxSourceBytes` | `number` | `262144` | Maximum embedded source size accepted for analysis. |
-| `maxDepth` | `number` | `4` | Maximum recursive `bash -c`/`sh -c` wrapper depth. |
-| `maxNodes` | `number` | `10000` | Maximum syntax-tree nodes visited per embedded source. |
 
 ### AgentTimeout fields
 
@@ -1015,7 +964,6 @@ Pair this with a strict `defaultAction: "deny"` policy to maximize the benefit: 
 | `tool` | `string` | Yes | Tool name or glob. Wildcards: `*` (any chars), `?` (one char). |
 | `pattern` | `string` | bash only | Glob matched against the full command string. Only used when `tool` is `"bash"`. |
 | `message` | `string` | nudge only | Reminder text prepended to the tool result (so the LLM sees it first) and shown in the pi UI. Required when `action` is `"nudge"`. |
-| `allowUnanalyzed` | `boolean` | No | For an `allow` Bash rule, bypasses the interpreter-analysis fallback when its source cannot be analyzed. Use only for a narrowly trusted command pattern, such as `"bun run*"`. |
 | `policy` | `string` | approval rules only | Limits an interactive approval to one named policy. Omit it only for a deliberately policy-agnostic manual approval. |
 
 ### Persisting an approval
@@ -1065,7 +1013,7 @@ src/
     path.ts           # Path normalization and ~ expansion
     location.ts       # Path → policy resolution
     matching.ts       # Rule matching, specificity scoring, action resolution
-    bash-ast.ts       # bash-parser wrapper with regex fallback
+    bash-ast.ts       # Tree-sitter Bash parsing with tokenizer fallback
     deny-tracker.ts   # Sliding-window counter used by both agentTimeout and nudgeTimeout circuit breakers
 tests/
   hooks/

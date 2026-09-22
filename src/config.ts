@@ -27,12 +27,6 @@ export interface Rule {
 	/** Required when action is "nudge": the reminder message injected into the tool result. */
 	message?: string;
 	/**
-	 * Permit a matching `allow` Bash rule to bypass the fallback action for
-	 * interpreter source that cannot be statically analyzed. Use only for a
-	 * command pattern whose source execution you explicitly trust.
-	 */
-	allowUnanalyzed?: boolean;
-	/**
 	 * Optional policy name for an approval saved from an interactive prompt.
 	 * Omitted rules apply to every policy; interactive approvals always set it.
 	 */
@@ -110,19 +104,6 @@ export interface NudgeTimeout {
 	windowSeconds: number;
 }
 
-export interface InterpreterAnalysisConfig {
-	/** Enable analysis of source supplied to Python, Node, Bun, and shell wrappers. */
-	enabled: boolean;
-	/** Conservative action when analysis cannot prove all effects and targets. */
-	unknownAction: "ask" | "deny";
-	/** Maximum embedded source size accepted for analysis. */
-	maxSourceBytes: number;
-	/** Maximum nested shell-wrapper depth. */
-	maxDepth: number;
-	/** Maximum syntax-tree nodes visited per source. */
-	maxNodes: number;
-}
-
 export interface ControlsConfig {
 	policies?: Record<string, Policy>;
 	locations?: Record<string, string>;
@@ -162,8 +143,6 @@ export interface ControlsConfig {
 	 * This is the correct place to protect sensitive files from ALL tools.
 	 */
 	pathProtection?: Record<string, Action> | null;
-	/** Conservative static analysis for source hidden in interpreter invocations. */
-	interpreterAnalysis?: Partial<InterpreterAnalysisConfig> | null;
 }
 
 export interface ControlsResolvedConfig {
@@ -176,38 +155,6 @@ export interface ControlsResolvedConfig {
 	agentTimeout: AgentTimeout | null;
 	nudgeTimeout: NudgeTimeout | null;
 	pathProtection: Record<string, Action> | null;
-	/** Optional here so hand-built configs remain source compatible; the loader always supplies defaults. */
-	interpreterAnalysis?: InterpreterAnalysisConfig | null;
-}
-
-export const DEFAULT_INTERPRETER_ANALYSIS: InterpreterAnalysisConfig = {
-	enabled: true,
-	unknownAction: "ask",
-	maxSourceBytes: 256 * 1024,
-	maxDepth: 4,
-	maxNodes: 10_000,
-};
-
-function resolveInterpreterAnalysis(
-	value: Partial<InterpreterAnalysisConfig> | null | undefined,
-): InterpreterAnalysisConfig | null {
-	if (value === null) return null;
-	return {
-		enabled: value?.enabled !== false,
-		unknownAction: value?.unknownAction === "deny" ? "deny" : "ask",
-		maxSourceBytes:
-			typeof value?.maxSourceBytes === "number" && value.maxSourceBytes > 0
-				? value.maxSourceBytes
-				: DEFAULT_INTERPRETER_ANALYSIS.maxSourceBytes,
-		maxDepth:
-			typeof value?.maxDepth === "number" && value.maxDepth >= 0
-				? value.maxDepth
-				: DEFAULT_INTERPRETER_ANALYSIS.maxDepth,
-		maxNodes:
-			typeof value?.maxNodes === "number" && value.maxNodes > 0
-				? value.maxNodes
-				: DEFAULT_INTERPRETER_ANALYSIS.maxNodes,
-	};
 }
 
 const DEFAULTS: ControlsResolvedConfig = {
@@ -219,7 +166,6 @@ const DEFAULTS: ControlsResolvedConfig = {
 	agentTimeout: null,
 	nudgeTimeout: null,
 	pathProtection: null,
-	interpreterAnalysis: DEFAULT_INTERPRETER_ANALYSIS,
 };
 
 // ─── File discovery ───────────────────────────────────────────────────────────
@@ -459,7 +405,6 @@ export class ControlsConfigLoader {
 				...(localCfg?.approvalRules ?? []),
 			],
 			policies: expandPolicies(raw.policies),
-			interpreterAnalysis: resolveInterpreterAnalysis(raw.interpreterAnalysis),
 		};
 	}
 

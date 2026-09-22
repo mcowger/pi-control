@@ -112,8 +112,6 @@ For bash, derive a pattern only from the stable safe portion of commands. For ex
 
 but repeated `git push origin main` requests should normally remain an explicit confirmation. For non-bash tools, propose the exact tool name, not a broad glob, unless the evidence and risk profile justify it.
 
-If the `reason` field indicates unresolved interpreter/source analysis, do not add an allow rule merely to eliminate that prompt. Explain that doing so could bypass conservative static-analysis protection and suggest reviewing the underlying command or interpreter-analysis settings instead.
-
 ## 5. Present the result
 
 Provide a concise report containing:

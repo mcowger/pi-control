@@ -23,7 +23,6 @@ describe("interactive approval config", () => {
 			action: "allow",
 			tool: "bash",
 			pattern: "git push *",
-			allowUnanalyzed: true,
 		});
 
 		expect(result).toEqual({
@@ -35,8 +34,7 @@ describe("interactive approval config", () => {
 		{
 			"action": "allow",
 			"tool": "bash",
-			"pattern": "git push *",
-			"allowUnanalyzed": true
+			"pattern": "git push *"
 		}
 	]
 }
