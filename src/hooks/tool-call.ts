@@ -20,8 +20,20 @@ import { normalizePath } from "../utils/path.js";
 import { parseCommand } from "../utils/bash-ast.js";
 import { logDecision } from "../utils/logger.js";
 import { minimatch } from "minimatch";
+import { basename } from "node:path";
 import { DenyTracker } from "../utils/deny-tracker.js";
 import { suggestSessionPattern } from "../utils/bash-arity.js";
+import type { CommandStage } from "../utils/bash-ast.js";
+import { detectEvalSources, type EvalSource } from "../utils/eval-detection.js";
+import {
+	DecisionsError,
+	classifySource,
+	evalCacheKey,
+	getCachedVerdict,
+	setCachedVerdict,
+	verdictRationale,
+} from "../utils/decisions.js";
+import type { EvalTrace } from "../utils/logger.js";
 
 /**
  * Nudge messages pending injection into tool results, keyed by toolCallId.
@@ -117,6 +129,149 @@ function getNudgeTracker(key: string): DenyTracker {
  */
 export function nudgeKey(tool: string, pattern?: string): string {
 	return pattern !== undefined ? `${tool}:${pattern}` : tool;
+}
+
+/** One eval-derived contribution to the final bash verdict. */
+interface EvalOutcome {
+	action: "allow" | "ask" | "deny";
+	note: string;
+	trace: EvalTrace;
+}
+
+/** Warn once per session when eval classification auth fails. */
+let decisionsAuthWarned = false;
+
+/** argv[0] label for an eval trace ("unknown" when dynamic). */
+function stageInterpreterLabel(stage: CommandStage): string {
+	const first = stage.args[0];
+	if (!first?.static) return "unknown";
+	return basename(first.value).toLowerCase() || "unknown";
+}
+
+/**
+ * Classify inline eval sources in bash stages via the Decisions API.
+ *
+ * Returns one outcome per source (plus one per unrecoverable/error case).
+ * Skips the API entirely — recording the reason — when the feature is off,
+ * no evals are present, or the command already carries an explicit approval.
+ */
+async function classifyEvalSources(
+	ctx: ExtensionContext,
+	stages: CommandStage[],
+	pipeline: string,
+	cwd: string,
+	targets: string[],
+	config: ControlsResolvedConfig,
+	approvalAllowed: boolean,
+	sessionAllowed: boolean,
+): Promise<{
+	outcomes: EvalOutcome[];
+	skipped?: "session-allow" | "approval-rule";
+}> {
+	const decisions = config.decisions;
+	if (!decisions) return { outcomes: [] };
+
+	const found: { source: EvalSource; stageCommand: string }[] = [];
+	const missing: { interpreter: string; detail: string }[] = [];
+	for (const stage of stages) {
+		const detection = detectEvalSources(stage);
+		for (const source of detection.sources) {
+			found.push({ source, stageCommand: stage.command });
+		}
+		const label = stageInterpreterLabel(stage);
+		for (const detail of detection.unavailable) {
+			missing.push({ interpreter: label, detail });
+		}
+	}
+	if (found.length === 0 && missing.length === 0) return { outcomes: [] };
+	if (sessionAllowed) return { outcomes: [], skipped: "session-allow" };
+	if (approvalAllowed) return { outcomes: [], skipped: "approval-rule" };
+
+	const outcomes: EvalOutcome[] = [];
+	for (const { interpreter, detail } of missing) {
+		const action = decisions.unavailableAction;
+		outcomes.push({
+			action,
+			note: detail,
+			trace: { kind: "unavailable", interpreter, detail, action },
+		});
+	}
+	const classified = await Promise.all(
+		found.map(async ({ source, stageCommand }): Promise<EvalOutcome> => {
+			const key = evalCacheKey(source.language, source.source);
+			const cached = getCachedVerdict(key);
+			if (cached !== undefined) {
+				return {
+					action: cached,
+					note: `cached: ${cached}`,
+					trace: { kind: "cached", key, verdict: cached },
+				};
+			}
+			const started = Date.now();
+			try {
+				const result = await classifySource(
+					{ source, stageCommand, pipeline, cwd, targets },
+					decisions,
+				);
+				setCachedVerdict(key, result.verdict);
+				return {
+					action: result.verdict,
+					note: verdictRationale(result),
+					trace: {
+						kind: "classified",
+						language: source.language,
+						interpreter: source.interpreter,
+						origin: source.origin,
+						truncated: result.request.state.truncated,
+						request: result.request,
+						response: result.response,
+						evaluation: {
+							buckets: result.buckets,
+							appliedConfig: {
+								yesThreshold: decisions.yesThreshold,
+								noThreshold: decisions.noThreshold,
+								choiceConfidence: decisions.choiceConfidence,
+								backstopThreshold: decisions.backstopThreshold,
+								weights: decisions.weights,
+							},
+							stage1: result.stage1,
+							stage2: result.stage2,
+							verdict: result.verdict,
+						},
+						latencyMs: result.latencyMs,
+					},
+				};
+			} catch (error) {
+				const detail =
+					error instanceof DecisionsError ? error.detail : String(error);
+				if (
+					error instanceof DecisionsError &&
+					error.code === "auth" &&
+					!decisionsAuthWarned
+				) {
+					decisionsAuthWarned = true;
+					ctx.ui.notify(
+						`[pi-controls] eval classification auth failed: ${detail}`,
+						"warning",
+					);
+				}
+				const action = decisions.errorAction;
+				return {
+					action,
+					note: detail,
+					trace: {
+						kind: "error",
+						interpreter: source.interpreter,
+						detail,
+						action,
+						latencyMs: Date.now() - started,
+					},
+				};
+			}
+		}),
+	);
+	outcomes.push(...classified);
+	return { outcomes };
 }
 
 function getTargetPaths(event: ToolCallEvent, cwd: string): string[] {
@@ -298,6 +453,7 @@ function notifyDecision(
 	deniedPaths: string[] = [],
 	matchedPattern?: string,
 	nudgeMessage?: string,
+	decisionNote?: string,
 ): void {
 	// In inform mode show everything (including allow) so user sees the full picture.
 	// In enforce mode, allow is silent — only show non-allow decisions.
@@ -323,7 +479,11 @@ function notifyDecision(
 		// Use "path" for log/ask (not yet blocked); "blocked path" only for deny.
 		const pathLabel = action === "deny" ? "blocked path" : "path";
 		const context = buildContextSuffix(deniedPaths, matchedPattern, pathLabel);
-		ctx.ui.notify(`pi-controls: ${label}${policy}${cmd}${context}`, type);
+		const evalSuffix = decisionNote ? ` — eval: ${decisionNote}` : "";
+		ctx.ui.notify(
+			`pi-controls: ${label}${policy}${cmd}${context}${evalSuffix}`,
+			type,
+		);
 	}
 }
 
@@ -339,6 +499,7 @@ async function executeAction(
 	escalatedFromNudge?: string,
 	summary?: string,
 	approvalPersistence?: ApprovalPersistence,
+	decisionNote?: string,
 ): Promise<ToolCallEventResult | undefined> {
 	switch (action) {
 		case "allow":
@@ -372,7 +533,8 @@ async function executeAction(
 			const summaryText = summary ? ` (${summary})` : "";
 			const context = buildContextSuffix(deniedPaths, matchedPattern);
 			const detail = context.length > 0 ? context : "";
-			const title = `[pi-controls] Allow ${toolName}${summaryText}?${detail}`;
+			const evalSuffix = decisionNote ? ` [eval: ${decisionNote}]` : "";
+			const title = `[pi-controls] Allow ${toolName}${summaryText}?${detail}${evalSuffix}`;
 			const choices = ["Allow", "Allow for session"];
 			if (approvalPersistence) {
 				choices.push("Allow for Project", "Allow Globally");
@@ -437,6 +599,7 @@ async function executeAction(
 		case "deny": {
 			const cmdPart = command ? ` (${command.slice(0, 80)})` : "";
 			const context = buildContextSuffix(deniedPaths, matchedPattern);
+			const evalSuffix = decisionNote ? ` [eval: ${decisionNote}]` : "";
 			const pathNote =
 				deniedPaths.length > 0
 					? ` The restriction is on the PATH${deniedPaths.length > 1 ? "S" : ""} ${deniedPaths.map((p) => `"${p}"`).join(", ")} — not on the tool. Do NOT retry with a different tool (read, ls, glob, cat, etc.); all access to these paths is blocked.`
@@ -446,7 +609,7 @@ async function executeAction(
 				: "";
 			return {
 				block: true,
-				reason: `[pi-controls] Access denied by policy: ${toolName}${cmdPart}${context}.${pathNote}${nudgeNote}`,
+				reason: `[pi-controls] Access denied by policy: ${toolName}${cmdPart}${context}${evalSuffix}.${pathNote}${nudgeNote}`,
 			};
 		}
 	}
@@ -548,6 +711,7 @@ export async function handleToolCall(
 		const targets: string[] = [];
 		const policyNames = new Set<string>();
 		let policyName: string | null = null;
+		let approvalAllowed = false;
 
 		for (const stage of stages) {
 			const stageTargets = [
@@ -565,13 +729,16 @@ export async function handleToolCall(
 				if (resolved) {
 					policyName = resolved.name;
 					policyNames.add(resolved.name);
+					const approved = matchingApprovalRule(
+						config,
+						resolved.name,
+						"bash",
+						stage.command,
+					);
+					if (approved) approvalAllowed = true;
 					const result =
-						matchingApprovalRule(
-							config,
-							resolved.name,
-							"bash",
-							stage.command,
-						) ?? matchRuleWithDetails(resolved.policy, "bash", stage.command);
+						approved ??
+						matchRuleWithDetails(resolved.policy, "bash", stage.command);
 					matchResults.push({
 						action: result.action,
 						matchedPattern: result.matchedPattern,
@@ -586,7 +753,26 @@ export async function handleToolCall(
 		const analyzedPathBlock = checkProtectedPaths(uniqueTargets, config);
 		if (analyzedPathBlock) return analyzedPathBlock;
 
-		if (matchResults.length === 0) {
+		// Eval classification (Decisions API): upgrade-only backstop for
+		// inline evals. Skipped entirely when unconfigured or approved.
+		const evalResult = await classifyEvalSources(
+			ctx,
+			stages,
+			cmd,
+			cwd,
+			uniqueTargets,
+			config,
+			approvalAllowed,
+			sessionAllowsBashMatches(cmd, uniqueTargets),
+		);
+		const evalActions = evalResult.outcomes.map((outcome) => outcome.action);
+		const evalTraces = evalResult.outcomes.map((outcome) => outcome.trace);
+
+		if (
+			matchResults.length === 0 &&
+			evalActions.length === 0 &&
+			!evalResult.skipped
+		) {
 			await logDecision({
 				ts: new Date().toISOString(),
 				tool: "bash",
@@ -599,7 +785,10 @@ export async function handleToolCall(
 			return undefined;
 		}
 
-		const actions = matchResults.map((result) => result.action);
+		const actions = [
+			...matchResults.map((result) => result.action),
+			...evalActions,
+		];
 		const finalAction = mostRestrictive(actions);
 		const matchedPattern = matchResults
 			.filter(
@@ -617,6 +806,18 @@ export async function handleToolCall(
 			nudgeMatch?.ruleKey ?? nudgeKey("bash", matchedPattern);
 		const deniedTargets = finalAction === "deny" ? uniqueTargets : [];
 
+		// Cite the eval rationale when an eval verdict is binding or tied
+		// with the location verdict (never for silent allows).
+		const evalBinding =
+			evalActions.length > 0 && mostRestrictive(evalActions) === finalAction;
+		const evalNote =
+			evalBinding && finalAction !== "allow"
+				? evalResult.outcomes
+						.filter((outcome) => outcome.action === finalAction)
+						.map((outcome) => outcome.note)
+						.join("; ") || undefined
+				: undefined;
+
 		await logDecision({
 			ts: new Date().toISOString(),
 			tool: "bash",
@@ -625,6 +826,8 @@ export async function handleToolCall(
 			targets: uniqueTargets,
 			policyName,
 			action: finalAction,
+			evals: evalTraces.length > 0 ? evalTraces : undefined,
+			evalSkipped: evalResult.skipped,
 		});
 		notifyDecision(
 			ctx,
@@ -636,6 +839,7 @@ export async function handleToolCall(
 			deniedTargets,
 			matchedPattern,
 			nudgeMessage,
+			evalNote,
 		);
 		if (mode === "inform") return undefined;
 		const effectiveBashAction = applyNudgeTimeout(
@@ -675,6 +879,7 @@ export async function handleToolCall(
 			bashEscalatedFromNudge,
 			summary,
 			approvalPersistence,
+			evalNote,
 		);
 	}
 

@@ -92,7 +92,7 @@ Use `jq -r` only if the user wants a human-readable table. Do not use `head` as 
 
 ## 4. Assess candidates conservatively
 
-For every candidate with repeated evidence, inspect the active pi-controls configuration and explain why it is being prompted before proposing a rule. The log records the resolved policy name, tool, command (for bash), and targets, but **does not record** the rule that matched or whether the user selected Allow, Allow for session, or Deny.
+For every candidate with repeated evidence, inspect the active pi-controls configuration and explain why it is being prompted before proposing a rule. The log records the resolved policy name, tool, command (for bash), and targets, but **does not record** the rule that matched or whether the user selected Allow, Allow for session, or Deny. Bash entries may also carry an `evals` array when inline-eval classification ran — each trace records its `evaluation.verdict` and either the Stage-1 `rule` that fired (e.g. `write-out-of-scope`) or the Stage-2 backstop score, which is the reason an eval-flavored ask/deny appeared.
 
 Recommend an `allow` rule only when all of these are true:
 

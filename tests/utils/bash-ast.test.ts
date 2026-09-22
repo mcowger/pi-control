@@ -120,20 +120,33 @@ describe("parseCommand", () => {
 		expect(stages[0].args[2].static).toBe(false);
 	});
 
-	it("ignores heredoc bodies (stdin is not a policy target)", async () => {
+	it("harvests static heredoc bodies as stdin sources", async () => {
 		const stages = await parseCommand(
 			"python3 - <<'PY'\nopen('/outside/x', 'w')\nPY",
 		);
 		expect(stages).toHaveLength(1);
 		expect(stages[0].command).toBe("python3 -");
 		expect(stages[0].redirectFiles).toEqual([]);
+		expect(stages[0].embeddedSources).toEqual([
+			{ kind: "heredoc", text: "open('/outside/x', 'w')\n", static: true },
+		]);
 	});
 
-	it("ignores here-strings (stdin is not a policy target)", async () => {
+	it("marks heredocs with expansions as dynamic stdin sources", async () => {
+		const stages = await parseCommand("python3 <<EOF\necho $HOME\nEOF");
+		expect(stages[0].embeddedSources).toEqual([
+			{ kind: "heredoc", text: "echo $HOME\n", static: false },
+		]);
+	});
+
+	it("harvests here-strings as stdin sources", async () => {
 		const stages = await parseCommand(
 			`python3 - <<< 'open("/outside/x", "w")'`,
 		);
 		expect(stages[0].redirectFiles).toEqual([]);
+		expect(stages[0].embeddedSources).toEqual([
+			{ kind: "herestring", text: 'open("/outside/x", "w")', static: true },
+		]);
 	});
 
 	it("keeps heredoc pipelines as a single stage", async () => {

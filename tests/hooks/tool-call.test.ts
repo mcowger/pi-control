@@ -1,4 +1,12 @@
-import { describe, expect, it, beforeAll, beforeEach, mock } from "bun:test"; // mock kept for ctx stubs
+import {
+	describe,
+	expect,
+	it,
+	beforeAll,
+	beforeEach,
+	afterEach,
+	mock,
+} from "bun:test"; // mock kept for ctx stubs
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +25,8 @@ import type {
 	ControlsConfig,
 	ControlsResolvedConfig,
 } from "../../src/config.js";
+import { resolveDecisions } from "../../src/config.js";
+import { clearEvalCache } from "../../src/utils/decisions.js";
 import type {
 	BashToolCallEvent,
 	ExtensionContext,
@@ -107,6 +117,7 @@ const config: ControlsResolvedConfig = {
 	agentTimeout: null,
 	nudgeTimeout: null,
 	pathProtection: null,
+	decisions: null,
 };
 
 describe("tool-call handler — path arg location resolution", () => {
@@ -193,6 +204,7 @@ describe("nudge action", () => {
 		agentTimeout: null,
 		nudgeTimeout: null,
 		pathProtection: null,
+		decisions: null,
 	};
 
 	it("allows the tool call (returns undefined) when action is nudge", async () => {
@@ -232,6 +244,7 @@ describe("agentTimeout escalation (deny → ask)", () => {
 		agentTimeout: { maxDenies: 3, windowSeconds: 60 },
 		nudgeTimeout: null,
 		pathProtection: null,
+		decisions: null,
 	};
 
 	// Config without agentTimeout — baseline to confirm deny stays deny.
@@ -364,12 +377,14 @@ describe("nudgeTimeout escalation (nudge → deny)", () => {
 		agentTimeout: null,
 		nudgeTimeout: { maxNudges: 3, windowSeconds: 60 },
 		pathProtection: null,
+		decisions: null,
 	};
 
 	const noNudgeTimeoutConfig: ControlsResolvedConfig = {
 		...nudgeTimeoutConfig,
 		nudgeTimeout: null,
 		pathProtection: null,
+		decisions: null,
 	};
 
 	beforeEach(() => {
@@ -495,6 +510,7 @@ describe("nudgeTimeout escalation (nudge → deny)", () => {
 			agentTimeout: null,
 			nudgeTimeout: { maxNudges: 2, windowSeconds: 60 },
 			pathProtection: null,
+			decisions: null,
 		};
 
 		const ctx = makeCtx("/tmp");
@@ -544,6 +560,7 @@ describe("nudgeTimeout escalation (nudge → deny)", () => {
 			agentTimeout: null,
 			nudgeTimeout: { maxNudges: 2, windowSeconds: 60 },
 			pathProtection: null,
+			decisions: null,
 		};
 
 		const ctx = makeCtx("/tmp");
@@ -608,6 +625,7 @@ describe("session allows", () => {
 		agentTimeout: null,
 		nudgeTimeout: null,
 		pathProtection: null,
+		decisions: null,
 		cycleKey: "ctrl+shift+m",
 	};
 
@@ -816,6 +834,7 @@ describe("session allows", () => {
 			agentTimeout: null,
 			nudgeTimeout: null,
 			pathProtection: null,
+			decisions: null,
 			cycleKey: "ctrl+shift+m",
 		};
 
@@ -835,5 +854,266 @@ describe("session allows", () => {
 		expect((ctx.ui.select as ReturnType<typeof mock>).mock.calls.length).toBe(
 			1,
 		);
+	});
+});
+
+describe("eval classification via Decisions API", () => {
+	const realFetch = globalThis.fetch;
+	let fetchCalls = 0;
+
+	const evalConfig: ControlsResolvedConfig = {
+		policies: {
+			open: { defaultAction: "allow", rules: [] },
+			locked: { defaultAction: "deny", rules: [] },
+		},
+		locations: { "/tmp": "open" },
+		defaultPolicy: "locked",
+		cycleKey: "ctrl+shift+m",
+		agentTimeout: null,
+		nudgeTimeout: null,
+		pathProtection: null,
+		decisions: resolveDecisions({
+			tokenEnv: "PICONTROLS_TEST_TOKEN",
+			url: "https://example.invalid/decisions",
+		})!,
+	};
+
+	function evalAnswers(overrides: Record<string, unknown> = {}) {
+		return {
+			destructive: { type: "noul", noul: 0.01 },
+			network: { type: "noul", noul: 0.01 },
+			exec: { type: "noul", noul: 0.01 },
+			obfuscated: { type: "noul", noul: 0.01 },
+			write_scope: {
+				type: "choice",
+				choice: "within",
+				confidence: 0.95,
+				probabilities: { within: 0.95, none: 0.05 },
+			},
+			read_scope: {
+				type: "choice",
+				choice: "ordinary",
+				confidence: 0.95,
+				probabilities: { ordinary: 0.95, none: 0.05 },
+			},
+			...overrides,
+		};
+	}
+
+	function stubFetch(impl: () => Promise<Response>): void {
+		globalThis.fetch = (async () => {
+			fetchCalls++;
+			return impl();
+		}) as unknown as typeof fetch;
+	}
+
+	function stubOk(answers: Record<string, unknown>): void {
+		stubFetch(async () => {
+			return new Response(
+				JSON.stringify({
+					id: "gen-test",
+					model: "test",
+					provider: "Test",
+					usage: { input_tokens: 10, output_tokens: 5 },
+					answers,
+				}),
+				{ status: 200 },
+			);
+		});
+	}
+
+	beforeEach(() => {
+		fetchCalls = 0;
+		sessionAllows.clear();
+		clearEvalCache();
+		process.env.PICONTROLS_TEST_TOKEN = "test-token";
+	});
+
+	afterEach(() => {
+		globalThis.fetch = realFetch;
+		delete process.env.PICONTROLS_TEST_TOKEN;
+		sessionAllows.clear();
+		clearEvalCache();
+	});
+
+	it("allows benign evals without prompting", async () => {
+		stubOk(evalAnswers());
+		const ctx = makeCtx("/tmp");
+		const result = await handleToolCall(
+			bashEvent('python3 -c "print(1)"', "eval-allow"),
+			ctx,
+			evalConfig,
+		);
+		expect(result).toBeUndefined();
+		expect(fetchCalls).toBe(1);
+		expect((ctx.ui.select as ReturnType<typeof mock>).mock.calls.length).toBe(
+			0,
+		);
+	});
+
+	it("denies dangerous evals with the rule rationale", async () => {
+		stubOk(
+			evalAnswers({
+				destructive: { type: "noul", noul: 0.95 },
+				write_scope: {
+					type: "choice",
+					choice: "outside",
+					confidence: 0.9,
+					probabilities: { outside: 0.9, within: 0.1 },
+				},
+			}),
+		);
+		const result = await handleToolCall(
+			bashEvent('python3 -c "import shutil; shutil.rmtree(1)"', "eval-deny"),
+			makeCtx("/tmp"),
+			evalConfig,
+		);
+		expect(result).toEqual({
+			block: true,
+			reason: expect.stringContaining("destructive-concealed-or-outside"),
+		});
+	});
+
+	it("asks on out-of-scope writes and shows the rationale", async () => {
+		stubOk(
+			evalAnswers({
+				write_scope: {
+					type: "choice",
+					choice: "outside",
+					confidence: 0.9,
+					probabilities: { outside: 0.9, within: 0.1 },
+				},
+			}),
+		);
+		const ctx = makeCtx("/tmp");
+		const result = await handleToolCall(
+			bashEvent('python3 -c "open(1)"', "eval-ask"),
+			ctx,
+			evalConfig,
+		);
+		expect(result).toBeUndefined();
+		const selectMock = ctx.ui.select as ReturnType<typeof mock>;
+		expect(selectMock.mock.calls.length).toBe(1);
+		expect(String(selectMock.mock.calls[0][0])).toContain("write-out-of-scope");
+	});
+
+	it("denies dangerous evals even where no location matches", async () => {
+		stubOk(
+			evalAnswers({
+				read_scope: {
+					type: "choice",
+					choice: "sensitive",
+					confidence: 0.9,
+					probabilities: { sensitive: 0.9 },
+				},
+				network: { type: "noul", noul: 0.9 },
+			}),
+		);
+		const openConfig: ControlsResolvedConfig = {
+			...evalConfig,
+			defaultPolicy: null,
+		};
+		const result = await handleToolCall(
+			bashEvent('python3 -c "exfil()"', "eval-gap"),
+			makeCtx("/home/user"),
+			openConfig,
+		);
+		expect(result).toEqual({
+			block: true,
+			reason: expect.stringContaining("exfil-shape"),
+		});
+	});
+
+	it("makes no fetch calls when decisions is unconfigured", async () => {
+		stubOk(evalAnswers());
+		const result = await handleToolCall(
+			bashEvent('python3 -c "print(1)"', "eval-off"),
+			makeCtx("/tmp"),
+			config,
+		);
+		expect(result).toBeUndefined();
+		expect(fetchCalls).toBe(0);
+	});
+
+	it("skips classification for session-allowed commands", async () => {
+		stubOk(evalAnswers());
+		const command = 'python3 -c "print(1)"';
+		sessionAllows.add(sessionAllowKey("bash", command, ["/tmp"]));
+		const result = await handleToolCall(
+			bashEvent(command, "eval-session"),
+			makeCtx("/tmp"),
+			evalConfig,
+		);
+		expect(result).toBeUndefined();
+		expect(fetchCalls).toBe(0);
+	});
+
+	it("skips classification for approval-rule allows", async () => {
+		stubOk(evalAnswers());
+		const approvedConfig: ControlsResolvedConfig = {
+			...evalConfig,
+			approvalRules: [
+				{ action: "allow", tool: "bash", pattern: "python3 *", policy: "open" },
+			],
+		};
+		const result = await handleToolCall(
+			bashEvent('python3 -c "print(1)"', "eval-approved"),
+			makeCtx("/tmp"),
+			approvedConfig,
+		);
+		expect(result).toBeUndefined();
+		expect(fetchCalls).toBe(0);
+	});
+
+	it("asks without fetching when the source is unrecoverable", async () => {
+		stubOk(evalAnswers());
+		const ctx = makeCtx("/tmp");
+		const result = await handleToolCall(
+			bashEvent('python3 -c "$CODE"', "eval-dynamic"),
+			ctx,
+			evalConfig,
+		);
+		expect(result).toBeUndefined();
+		expect(fetchCalls).toBe(0);
+		expect((ctx.ui.select as ReturnType<typeof mock>).mock.calls.length).toBe(
+			1,
+		);
+	});
+
+	it("falls back to errorAction when the API fails", async () => {
+		stubFetch(async () => {
+			throw new Error("boom");
+		});
+		const ctx = makeCtx("/tmp");
+		const result = await handleToolCall(
+			bashEvent('python3 -c "print(1)"', "eval-error"),
+			ctx,
+			evalConfig,
+		);
+		expect(result).toBeUndefined();
+		expect(fetchCalls).toBe(1);
+		expect((ctx.ui.select as ReturnType<typeof mock>).mock.calls.length).toBe(
+			1,
+		);
+	});
+
+	it("caches repeat classifications within the session", async () => {
+		stubOk(evalAnswers());
+		const command = 'python3 -c "print(1)"';
+		expect(
+			await handleToolCall(
+				bashEvent(command, "eval-cache-1"),
+				makeCtx("/tmp"),
+				evalConfig,
+			),
+		).toBeUndefined();
+		expect(
+			await handleToolCall(
+				bashEvent(command, "eval-cache-2"),
+				makeCtx("/tmp"),
+				evalConfig,
+			),
+		).toBeUndefined();
+		expect(fetchCalls).toBe(1);
 	});
 });

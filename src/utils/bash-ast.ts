@@ -6,6 +6,7 @@
  *   - Static command arguments
  *   - File paths from redirect targets (skips fd-to-fd/numeric-fd redirects)
  *   - Path-like non-flag arguments
+ *   - Static source supplied through heredocs and here-strings
  *
  * Falls back to a simple tokenizer when Tree-sitter is unavailable or parsing
  * cannot identify a command.
@@ -24,6 +25,12 @@ export interface CommandArgument {
 	static: boolean;
 }
 
+export interface EmbeddedSource {
+	kind: "heredoc" | "herestring";
+	text: string;
+	static: boolean;
+}
+
 export interface CommandStage {
 	/** Reconstructed command string for pattern matching. */
 	command: string;
@@ -33,6 +40,8 @@ export interface CommandStage {
 	redirectFiles: string[];
 	/** Path-like non-flag arguments (e.g. `~`, `/tmp/foo`, `./bar`). */
 	pathArgs: string[];
+	/** Source supplied directly to the command's standard input. */
+	embeddedSources: EmbeddedSource[];
 }
 
 // ─── Module state ────────────────────────────────────────────────────────────
@@ -253,21 +262,48 @@ function redirectNodes(node: SyntaxNode): SyntaxNode[] {
 		.filter((child) => child !== null);
 }
 
-function extractRedirects(redirects: SyntaxNode[]): string[] {
+function extractRedirects(
+	redirects: SyntaxNode[],
+): Pick<CommandStage, "redirectFiles" | "embeddedSources"> {
 	const redirectFiles: string[] = [];
+	const embeddedSources: EmbeddedSource[] = [];
 
 	for (const redirect of redirects) {
-		if (redirect.type !== "file_redirect") continue;
-		// Redirects with an explicit numeric file descriptor (2>/dev/null, 2>&1)
-		// are not policy targets.
-		if (redirect.childForFieldName("descriptor")) continue;
-		const destination = redirect.childForFieldName("destination");
-		if (!destination) continue;
-		const argument = argumentFromNode(destination);
-		if (argument.static) redirectFiles.push(argument.value);
+		if (redirect.type === "file_redirect") {
+			// Redirects with an explicit numeric file descriptor (2>/dev/null, 2>&1)
+			// are not policy targets.
+			if (redirect.childForFieldName("descriptor")) continue;
+			const destination = redirect.childForFieldName("destination");
+			if (!destination) continue;
+			const argument = argumentFromNode(destination);
+			if (argument.static) redirectFiles.push(argument.value);
+			continue;
+		}
+		if (redirect.type === "heredoc_redirect") {
+			const body = namedChildren(redirect).find(
+				(child) => child.type === "heredoc_body",
+			);
+			if (!body) continue;
+			embeddedSources.push({
+				kind: "heredoc",
+				text: body.text,
+				static: !containsDynamicShellNode(body),
+			});
+			continue;
+		}
+		if (redirect.type === "herestring_redirect") {
+			const source = namedChildren(redirect).at(-1);
+			if (!source) continue;
+			const argument = argumentFromNode(source);
+			embeddedSources.push({
+				kind: "herestring",
+				text: argument.value,
+				static: argument.static,
+			});
+		}
 	}
 
-	return redirectFiles;
+	return { redirectFiles, embeddedSources };
 }
 
 function buildStage(
@@ -296,7 +332,7 @@ function buildStage(
 		}
 	}
 
-	const redirectFiles = extractRedirects(redirects);
+	const { redirectFiles, embeddedSources } = extractRedirects(redirects);
 	const pathArgs = pathArgsForCommand(args);
 
 	return {
@@ -304,6 +340,7 @@ function buildStage(
 		args,
 		redirectFiles,
 		pathArgs,
+		embeddedSources,
 	};
 }
 
@@ -369,6 +406,7 @@ function regexFallback(command: string): CommandStage[] {
 			args,
 			redirectFiles: [],
 			pathArgs,
+			embeddedSources: [],
 		},
 	];
 }

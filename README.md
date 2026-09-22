@@ -23,6 +23,7 @@ When the agent tries to run a bash command, read a file, write to a path, or cal
 - [Multi-Target Resolution](#multi-target-resolution)
 - [Bash Command Parsing](#bash-command-parsing)
 - [Safe Command Patterns](#safe-command-patterns)
+- [Eval Classification](#eval-classification)
 - [Examples](#examples)
   - [Protect production configs](#protect-production-configs)
   - [Audit-only mode](#audit-only-mode)
@@ -516,6 +517,24 @@ See [`examples/sample.jsonc`](examples/sample.jsonc) for a complete working exam
 
 ---
 
+## Eval Classification
+
+Inline code evals — `python -c`, `node -e`, `bun -e`, `deno eval`, `tsx -e`, `bash -c`, and heredoc-fed interpreters — are invisible to path- and pattern-based policy. When the optional top-level `decisions` block is configured, each eval's source is sent to the OpenRouter Decisions API (`POST {url}`, plain `fetch`, no SDK), which answers capability/scope questions about the code. Absent the block, the feature is fully off: bash enforcement is location policy only, with zero network calls.
+
+**Scope.** Only bash stages that execute inline code through a covered interpreter are classified. Ordinary shell commands, script-file and module runs (`python script.py`, `python -m pytest`), non-bash tools, and commands with an explicit session or saved approval never touch the API. Eval-shaped invocations with no recoverable source (`python -c "$CODE"`, `curl … | python3`) make no API call and fall back to `unavailableAction`.
+
+**Verdict engine.** The model answers six questions — `destructive`, `network`, `exec`, and `obfuscated` (boolean), plus `write_scope` and `read_scope` (choice questions scoped against the cwd, e.g. a write inside the project vs. one to `/etc`). A deterministic rule table maps the answers to `allow` / `ask` / `deny`: destructive, exfil-shaped (`sensitive` read + network), and concealed-capability (obfuscated + network/exec) combinations deny; out-of-scope writes, sensitive reads, and uncertainty ask; routine in-scope capabilities (including network- or subprocess-use alone) allow. A weighted-score backstop catches accumulated weak signals when no rule fires — it can only ever ask, never deny. Full question text, rule IDs, and weights live in [`docs/plans/2026-09-22-decisions-eval-classification.md`](docs/plans/2026-09-22-decisions-eval-classification.md).
+
+**Combination.** The eval verdict combines upgrade-only with the location verdict via the usual most-restrictive rule: the model can escalate an `allow` to `ask`/`deny`, but can never downgrade a location `ask`/`deny`.
+
+**Auth.** The bearer token is read from the env var named by `tokenEnv` (default `OPENROUTER_API_KEY`); the token itself never appears in config. Set a credit limit on the key — a runaway agent with an unlimited key can spend the whole balance.
+
+**Cost and latency.** Roughly one sub-second request per eval source (~$0.00002 in testing). Repeat evals are served from a session cache, and approved commands skip the API entirely.
+
+**Tuning and logging.** Thresholds, buckets, and all backstop weights are config knobs (single weights can be overridden per project). Every classification appends a full trace to `pi-controls.log`: the exact state/questions sent, raw answers plus token/cost usage, applied weights and thresholds, the rule fired or score breakdown, and the final verdict — the dataset for future tuning.
+
+---
+
 ## Examples
 
 ### Protect production configs
@@ -934,6 +953,7 @@ Pair this with a strict `defaultAction: "deny"` policy to maximize the benefit: 
 | `defaultPolicy` | `string \| null` | No | Policy to apply when no location matches. `null` or absent = fail-open. |
 | `agentTimeout` | `AgentTimeout \| null` | No | Circuit breaker: escalate `deny` → `ask` when the deny rate exceeds the threshold. `null` or absent = disabled. |
 | `nudgeTimeout` | `NudgeTimeout \| null` | No | Circuit breaker: escalate `nudge` → `deny` when the same nudge rule is ignored too many times. `null` or absent = disabled. |
+| `decisions` | `DecisionsConfig \| null` | No | Eval classification via the Decisions API (see [Eval Classification](#eval-classification)). `null` or absent = disabled. |
 
 ### AgentTimeout fields
 
@@ -948,6 +968,23 @@ Pair this with a strict `defaultAction: "deny"` policy to maximize the benefit: 
 |-------|------|----------|-------------|
 | `maxNudges` | `number` | Yes | Number of nudges for the same rule within `windowSeconds` before escalating to deny. |
 | `windowSeconds` | `number` | Yes | Rolling window size in seconds. Events older than this are ignored. |
+
+### Decisions fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | `string` | No | Full endpoint URL. Defaults to `https://openrouter.ai/api/alpha/decisions`. |
+| `tokenEnv` | `string` | No | Env var **name** holding the bearer token. Defaults to `OPENROUTER_API_KEY`. |
+| `model` | `string` | No | Model requested from the Decisions router. Defaults to `typesafe/jev-1.13`. |
+| `timeoutMs` | `number` | No | Per-request timeout in ms. Defaults to `15000`. |
+| `maxSourceBytes` | `number` | No | Sources beyond this are truncated (flagged `truncated:true`). Defaults to `32768`. |
+| `unavailableAction` | `"allow" \| "ask" \| "deny"` | No | Eval shape detected but source not recoverable. Defaults to `"ask"`. |
+| `errorAction` | `"allow" \| "ask" \| "deny"` | No | API/network/auth/timeout/malformed failure. Defaults to `"ask"`. |
+| `yesThreshold` | `number` | No | Boolean probability at/above this → yes. Defaults to `0.7`. |
+| `noThreshold` | `number` | No | Boolean probability at/below this → no (between → uncertain). Defaults to `0.3`. |
+| `choiceConfidence` | `number` | No | Choice top-label probability needed for a confident label. Defaults to `0.6`. |
+| `backstopThreshold` | `number` | No | Weighted score at/above this → ask. Defaults to `40`. |
+| `weights` | `Record<string, number>` | No | Per-signal weights (`destructive`, `obfuscated`, `network`, `exec`, `writeSensitive`, `writeOutside`, `writeUnknown`, `readSensitive`, `readUnknown`). Deep-merged, so single weights can be overridden. |
 
 ### Policy fields
 
