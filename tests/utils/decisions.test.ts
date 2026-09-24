@@ -32,6 +32,7 @@ function answers(
 		destructive: { type: "noul", noul: 0.01 },
 		network: { type: "noul", noul: 0.01 },
 		exec: { type: "noul", noul: 0.01 },
+		inference_call: { type: "noul", noul: 0.01 },
 		obfuscated: { type: "noul", noul: 0.01 },
 		write_scope: {
 			type: "choice",
@@ -93,6 +94,17 @@ describe("bucketAnswers", () => {
 			config,
 		);
 		expect(unsure.buckets.write_scope).toBe("uncertain");
+	});
+
+	it("treats benign-label dithering as the top label, not uncertain", () => {
+		const config = testConfig();
+		const { buckets } = bucketAnswers(
+			answers({
+				read_scope: scope("ordinary", { ordinary: 0.5, none: 0.4 }),
+			}),
+			config,
+		);
+		expect(buckets.read_scope).toBe("ordinary");
 	});
 
 	it("rejects missing and mistyped answers", () => {
@@ -214,7 +226,12 @@ describe("scoreBackstop", () => {
 
 	it("trips on accumulated weak signals", () => {
 		const result = scoreBackstop(
-			{ destructive: 0.05, network: 0.65, exec: 0.6, obfuscated: 0.5 },
+			{
+				destructive: 0.05,
+				network: 0.65,
+				exec: 0.6,
+				obfuscated: 0.5,
+			},
 			{ write_scope: { within: 0.9 }, read_scope: { ordinary: 0.9 } },
 			config,
 		);
@@ -232,7 +249,12 @@ describe("scoreBackstop", () => {
 
 	it("stays quiet on two uncertain modifiers", () => {
 		const result = scoreBackstop(
-			{ destructive: 0.05, network: 0.65, exec: 0.6, obfuscated: 0.05 },
+			{
+				destructive: 0.05,
+				network: 0.65,
+				exec: 0.6,
+				obfuscated: 0.05,
+			},
 			{ write_scope: { within: 0.9 }, read_scope: { ordinary: 0.9 } },
 			config,
 		);
@@ -243,7 +265,12 @@ describe("scoreBackstop", () => {
 
 	it("counts scope probability tails", () => {
 		const result = scoreBackstop(
-			{ destructive: 0.05, network: 0.05, exec: 0.05, obfuscated: 0.05 },
+			{
+				destructive: 0.05,
+				network: 0.05,
+				exec: 0.05,
+				obfuscated: 0.05,
+			},
 			{
 				write_scope: { within: 0.6, outside: 0.3, unknown: 0.1 },
 				read_scope: { ordinary: 1 },
@@ -260,7 +287,12 @@ describe("scoreBackstop", () => {
 	it("honours a configured threshold", () => {
 		const strict = testConfig({ backstopThreshold: 10 });
 		const result = scoreBackstop(
-			{ destructive: 0.05, network: 0.05, exec: 0.05, obfuscated: 0.05 },
+			{
+				destructive: 0.05,
+				network: 0.05,
+				exec: 0.05,
+				obfuscated: 0.05,
+			},
 			{ write_scope: { within: 1 }, read_scope: { ordinary: 1 } },
 			strict,
 		);
@@ -487,5 +519,59 @@ describe("eval verdict cache", () => {
 		expect(getCachedVerdict("k0")).toBeUndefined();
 		expect(getCachedVerdict("k1")).toBe("allow");
 		expect(getCachedVerdict("fresh")).toBe("deny");
+	});
+});
+
+it("honours a configured threshold", () => {
+	const strict = testConfig({ backstopThreshold: 10 });
+	const result = scoreBackstop(
+		{
+			destructive: 0.05,
+			network: 0.05,
+			exec: 0.05,
+			obfuscated: 0.05,
+		},
+		{ write_scope: { within: 1 }, read_scope: { ordinary: 1 } },
+		strict,
+	);
+	expect(result.breached).toBe(false);
+	expect(result.threshold).toBe(10);
+});
+
+describe("inference_call", () => {
+	const config = testConfig();
+
+	it("asks on token-spending model inference via its own rule", () => {
+		const { buckets } = bucketAnswers(
+			answers({ inference_call: noul(0.9) }),
+			config,
+		);
+		expect(applyStage1(buckets)).toEqual({
+			verdict: "ask",
+			rule: "inference-call",
+		});
+	});
+
+	it("stays quiet when no inference call is visible", () => {
+		const { buckets } = bucketAnswers(
+			answers({ inference_call: noul(0.5) }),
+			config,
+		);
+		expect(applyStage1(buckets)).toEqual({ verdict: null, rule: null });
+	});
+
+	it("contributes to the backstop score", () => {
+		const result = scoreBackstop(
+			{
+				destructive: 0.05,
+				network: 0.05,
+				exec: 0.05,
+				inference_call: 0.9,
+				obfuscated: 0.05,
+			},
+			{ write_scope: { within: 1 }, read_scope: { ordinary: 1 } },
+			config,
+		);
+		expect(result.contributions.inferenceCall).toBe(9);
 	});
 });

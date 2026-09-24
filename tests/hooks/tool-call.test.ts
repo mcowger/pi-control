@@ -883,6 +883,7 @@ describe("eval classification via Decisions API", () => {
 			destructive: { type: "noul", noul: 0.01 },
 			network: { type: "noul", noul: 0.01 },
 			exec: { type: "noul", noul: 0.01 },
+			inference_call: { type: "noul", noul: 0.01 },
 			obfuscated: { type: "noul", noul: 0.01 },
 			write_scope: {
 				type: "choice",

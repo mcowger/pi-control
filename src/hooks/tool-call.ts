@@ -231,6 +231,7 @@ async function classifyEvalSources(
 								yesThreshold: decisions.yesThreshold,
 								noThreshold: decisions.noThreshold,
 								choiceConfidence: decisions.choiceConfidence,
+								riskyMassThreshold: decisions.riskyMassThreshold,
 								backstopThreshold: decisions.backstopThreshold,
 								weights: decisions.weights,
 							},

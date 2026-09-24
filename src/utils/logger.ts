@@ -20,6 +20,7 @@ export type AppliedTuningConfig = Pick<
 	| "yesThreshold"
 	| "noThreshold"
 	| "choiceConfidence"
+	| "riskyMassThreshold"
 	| "backstopThreshold"
 	| "weights"
 >;

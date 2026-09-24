@@ -44,6 +44,7 @@ export interface DecisionsWeights {
 	obfuscated: number;
 	network: number;
 	exec: number;
+	inferenceCall: number;
 	writeSensitive: number;
 	writeOutside: number;
 	writeUnknown: number;
@@ -68,8 +69,10 @@ export interface DecisionsConfig {
 	yesThreshold: number;
 	/** noul p <= this → NO; between → UNCERTAIN. */
 	noThreshold: number;
-	/** choice P(top) >= this → confident label, else UNCERTAIN. */
+	/** choice P(top) >= this → confident label, else mass check. */
 	choiceConfidence: number;
+	/** Risky-label mass at/above this → UNCERTAIN (ask); below → top label. */
+	riskyMassThreshold: number;
 	/** Backstop score >= this → ask (the backstop never denies). */
 	backstopThreshold: number;
 	weights: DecisionsWeights;
@@ -86,12 +89,14 @@ export const DEFAULT_DECISIONS: DecisionsConfig = {
 	yesThreshold: 0.7,
 	noThreshold: 0.3,
 	choiceConfidence: 0.6,
+	riskyMassThreshold: 0.35,
 	backstopThreshold: 40,
 	weights: {
 		destructive: 100,
 		obfuscated: 40,
 		network: 25,
 		exec: 15,
+		inferenceCall: 10,
 		writeSensitive: 50,
 		writeOutside: 30,
 		writeUnknown: 20,
@@ -151,6 +156,13 @@ export function resolveDecisions(raw: unknown): DecisionsConfig | null {
 		input.choiceConfidence <= 1
 			? input.choiceConfidence
 			: defaults.choiceConfidence;
+	const riskyMassThreshold =
+		typeof input.riskyMassThreshold === "number" &&
+		Number.isFinite(input.riskyMassThreshold) &&
+		input.riskyMassThreshold > 0 &&
+		input.riskyMassThreshold <= 1
+			? input.riskyMassThreshold
+			: defaults.riskyMassThreshold;
 
 	const rawWeights =
 		input.weights !== null && typeof input.weights === "object"
@@ -164,6 +176,10 @@ export function resolveDecisions(raw: unknown): DecisionsConfig | null {
 		obfuscated: validWeight(rawWeights.obfuscated, defaults.weights.obfuscated),
 		network: validWeight(rawWeights.network, defaults.weights.network),
 		exec: validWeight(rawWeights.exec, defaults.weights.exec),
+		inferenceCall: validWeight(
+			rawWeights.inferenceCall,
+			defaults.weights.inferenceCall,
+		),
 		writeSensitive: validWeight(
 			rawWeights.writeSensitive,
 			defaults.weights.writeSensitive,
@@ -209,6 +225,7 @@ export function resolveDecisions(raw: unknown): DecisionsConfig | null {
 		yesThreshold: thresholdsValid ? yesThreshold : defaults.yesThreshold,
 		noThreshold: thresholdsValid ? noThreshold : defaults.noThreshold,
 		choiceConfidence,
+		riskyMassThreshold,
 		backstopThreshold: validCount(
 			input.backstopThreshold,
 			defaults.backstopThreshold,
