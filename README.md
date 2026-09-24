@@ -533,6 +533,17 @@ Inline code evals — `python -c`, `node -e`, `bun -e`, `deno eval`, `tsx -e`, `
 
 **Tuning and logging.** Thresholds, buckets, and all backstop weights are config knobs (single weights can be overridden per project). Every classification appends a full trace to `pi-controls.log`: the exact state/questions sent, raw answers plus token/cost usage, applied weights and thresholds, the rule fired or score breakdown, and the final verdict — the dataset for future tuning.
 
+### Calibration methodology
+
+The questions, criteria, and rules above were not written from best guesses. They were tuned over seven rounds against **260 human verdicts on real inline evals** mined from 10 days of actual pi sessions (18,894 bash calls → 1,417 unique evals), split into train and holdback sets:
+
+- Each round classified the labeled train set via the live API, diffed verdicts against human labels, and adjusted **questions and criteria first** — weights and thresholds were never touched (benign scores sit 4–28 against the 40 line).
+- Label evidence overturned design twice: two proposed questions (external, then credentialed, egress) were added and later **removed** when labels showed routine admin checks allow — including a same-day revert of an overreaching filename rule.
+- Tuning stopped at **~97% agreement** against a measured **~3% human label-error rate** (8 flipped labels of 260, plus 2 quarantined for redaction skew) and ±2 run-to-run model variance — the noise ceiling, where further tuning would fit noise. Residuals are documented, not tuned around.
+- Holdback scored 48/50 on first measurement, matching train with no generalization gap.
+
+The full round-by-round history, residual log, and stopping rule live in the design doc appendix.
+
 ---
 
 ## Examples
